@@ -51,7 +51,14 @@ export function startIpcServer(cwd: string, onMessage: MessageHandler): Server {
     });
   });
 
-  server.listen(socketPath);
+  server.listen(socketPath, () => {
+    console.error(`[latch] IPC server listening on ${socketPath}`);
+  });
+
+  server.on("error", (err) => {
+    console.error(`[latch] IPC server error: ${err.message}`);
+    process.exit(1);
+  });
 
   const cleanup = () => {
     try {

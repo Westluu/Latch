@@ -1,4 +1,5 @@
 import { execSync, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -17,8 +18,22 @@ export function getSessionName(): string {
 }
 
 function sidecarCommand(cwd: string): string {
-  const sidecarScript = join(__dirname, "sidecar.js");
-  return `node "${sidecarScript}" "${cwd}"`;
+  // When bundled, __dirname is dist/ and sidecar.js is right next to us.
+  // When run via tsx in development, __dirname is src/ and sidecar.js doesn't
+  // exist there — fall back to the dist bundle or tsx.
+  const distSidecar = join(__dirname, "sidecar.js");
+  if (existsSync(distSidecar)) {
+    return `node "${distSidecar}" "${cwd}"`;
+  }
+  // Dev fallback: use the dist build from the project root if available
+  const rootDistSidecar = join(__dirname, "..", "dist", "sidecar.js");
+  if (existsSync(rootDistSidecar)) {
+    return `node "${rootDistSidecar}" "${cwd}"`;
+  }
+  // Last resort: run the source directly via tsx
+  const tsxBin = join(__dirname, "..", "node_modules", ".bin", "tsx");
+  const sidecarSrc = join(__dirname, "sidecar.tsx");
+  return `"${tsxBin}" "${sidecarSrc}" "${cwd}"`;
 }
 
 export function splitAndLaunchSidecar(cwd: string): string {

@@ -12,6 +12,7 @@ interface FileListProps {
   selectedIndex: number;
   onSelect: (index: number) => void;
   onOpen: (index: number) => void;
+  onClose: () => void;
   paneWidth: number;
   startRow: number;
 }
@@ -35,7 +36,7 @@ function truncate(str: string, maxWidth: number): string {
   return str.slice(0, maxWidth - 1) + "…";
 }
 
-export default function FileList({ files, selectedIndex, onSelect, onOpen, paneWidth, startRow }: FileListProps) {
+export default function FileList({ files, selectedIndex, onSelect, onOpen, onClose, paneWidth, startRow }: FileListProps) {
   const { isFocused } = useFocus({ id: "file-list", autoFocus: true });
 
   const maxTextWidth = paneWidth - 4;
@@ -72,7 +73,8 @@ export default function FileList({ files, selectedIndex, onSelect, onOpen, paneW
 
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={isFocused ? "blue" : "gray"} paddingX={1}>
-      <Box marginBottom={1}>
+      <Box marginBottom={1} gap={1}>
+        <Text color="red">[✕]</Text>
         <Text bold color={isFocused ? "blue" : "white"} wrap="truncate">
           Changed Files ({files.length})
         </Text>
