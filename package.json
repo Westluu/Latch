@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "bundle": "node scripts/bundle.mjs",
     "dev": "tsx src/cli.ts",
     "dev:ui": "tsx src/sidecar.tsx",
     "start": "node dist/cli.js"
@@ -17,7 +18,13 @@
     "type": "git",
     "url": "git+https://github.com/Westluu/Latch.git"
   },
-  "keywords": ["terminal", "sidecar", "tui", "agent", "claude-code"],
+  "keywords": [
+    "terminal",
+    "sidecar",
+    "tui",
+    "agent",
+    "claude-code"
+  ],
   "author": "",
   "license": "ISC",
   "bugs": {
@@ -34,6 +41,7 @@
   "devDependencies": {
     "@types/node": "^25.5.0",
     "@types/react": "^19.2.14",
+    "esbuild": "^0.27.4",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }
