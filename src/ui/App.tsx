@@ -7,9 +7,10 @@ import { getChangedFiles, readFile, getDiff } from "../git.js";
 
 interface AppProps {
   cwd: string;
+  onFileOpen?: (handler: (filePath: string) => void) => void;
 }
 
-export default function App({ cwd }: AppProps) {
+export default function App({ cwd, onFileOpen }: AppProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [files, setFiles] = useState<FileEntry[]>([]);
@@ -29,6 +30,22 @@ export default function App({ cwd }: AppProps) {
     const changed = getChangedFiles(cwd);
     setFiles(changed);
   }, [cwd]);
+
+  // Subscribe to external file open events (from IPC)
+  useEffect(() => {
+    if (!onFileOpen) return;
+    onFileOpen((filePath: string) => {
+      const changed = getChangedFiles(cwd);
+      setFiles(changed);
+      setOpenedFile(filePath);
+      setScrollOffset(0);
+      setMode("preview");
+      const content = readFile(cwd, filePath);
+      setPreviewContent(content ?? "Cannot read file");
+      const idx = changed.findIndex((f) => f.path === filePath);
+      if (idx >= 0) setSelectedIndex(idx);
+    });
+  }, [cwd, onFileOpen]);
 
   useInput((input, key) => {
     if (input === "q") {
