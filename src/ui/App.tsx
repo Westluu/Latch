@@ -4,6 +4,7 @@ import FileList, { type FileEntry } from "./FileList.js";
 import Preview from "./Preview.js";
 import StatusBar from "./StatusBar.js";
 import { getChangedFiles, readFile, getDiff } from "../git.js";
+import { cleanupMouseTracking } from "./useMouse.js";
 
 interface AppProps {
   cwd: string;
@@ -21,17 +22,20 @@ export default function App({ cwd, onFileOpen }: AppProps) {
   const [mode, setMode] = useState<"preview" | "diff">("preview");
 
   const termHeight = stdout?.rows ?? 24;
+  const termWidth = stdout?.columns ?? 80;
   const previewMaxLines = termHeight - 6;
+  const fileListWidth = Math.floor(termWidth * 0.4);
+
+  // FileList starts at row 3 (1 for border + 1 for title + 1 for marginBottom)
+  const fileListStartRow = 3;
 
   const { focusNext, focusPrevious } = useFocusManager();
 
-  // Load changed files on mount
   useEffect(() => {
     const changed = getChangedFiles(cwd);
     setFiles(changed);
   }, [cwd]);
 
-  // Subscribe to external file open events (from IPC)
   useEffect(() => {
     if (!onFileOpen) return;
     onFileOpen((filePath: string) => {
@@ -49,6 +53,7 @@ export default function App({ cwd, onFileOpen }: AppProps) {
 
   useInput((input, key) => {
     if (input === "q") {
+      cleanupMouseTracking();
       exit();
     }
     if (key.tab) {
@@ -62,7 +67,6 @@ export default function App({ cwd, onFileOpen }: AppProps) {
       if (openedFile) {
         setMode((m) => (m === "diff" ? "preview" : "diff"));
         setScrollOffset(0);
-        // Load diff content
         if (mode === "preview") {
           const diff = getDiff(cwd, openedFile);
           setPreviewContent(diff ?? "No diff available");
@@ -73,7 +77,6 @@ export default function App({ cwd, onFileOpen }: AppProps) {
       }
     }
     if (input === "r") {
-      // Refresh file list
       const changed = getChangedFiles(cwd);
       setFiles(changed);
       if (openedFile) {
@@ -102,6 +105,8 @@ export default function App({ cwd, onFileOpen }: AppProps) {
             selectedIndex={selectedIndex}
             onSelect={setSelectedIndex}
             onOpen={handleOpen}
+            paneWidth={fileListWidth}
+            startRow={fileListStartRow}
           />
         </Box>
         <Box flexGrow={1}>

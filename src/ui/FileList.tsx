@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useCallback } from "react";
 import { Box, Text, useFocus, useInput } from "ink";
+import { useMouse, type MouseEvt } from "./useMouse.js";
 
 export interface FileEntry {
   path: string;
@@ -11,6 +12,8 @@ interface FileListProps {
   selectedIndex: number;
   onSelect: (index: number) => void;
   onOpen: (index: number) => void;
+  paneWidth: number;
+  startRow: number;
 }
 
 const statusColors: Record<FileEntry["status"], string> = {
@@ -27,8 +30,15 @@ const statusLabels: Record<FileEntry["status"], string> = {
   untracked: "?",
 };
 
-export default function FileList({ files, selectedIndex, onSelect, onOpen }: FileListProps) {
+function truncate(str: string, maxWidth: number): string {
+  if (str.length <= maxWidth) return str;
+  return str.slice(0, maxWidth - 1) + "…";
+}
+
+export default function FileList({ files, selectedIndex, onSelect, onOpen, paneWidth, startRow }: FileListProps) {
   const { isFocused } = useFocus({ id: "file-list", autoFocus: true });
+
+  const maxTextWidth = paneWidth - 4;
 
   useInput(
     (input, key) => {
@@ -43,10 +53,27 @@ export default function FileList({ files, selectedIndex, onSelect, onOpen }: Fil
     { isActive: isFocused }
   );
 
+  const handleMouse = useCallback(
+    (evt: MouseEvt) => {
+      if (evt.x >= paneWidth) return;
+
+      if (evt.action === "down" && evt.button === 0) {
+        const fileIdx = evt.y - startRow;
+        if (fileIdx >= 0 && fileIdx < files.length) {
+          onSelect(fileIdx);
+          onOpen(fileIdx);
+        }
+      }
+    },
+    [files.length, onSelect, onOpen, paneWidth, startRow]
+  );
+
+  useMouse(handleMouse);
+
   return (
     <Box flexDirection="column" borderStyle="single" borderColor={isFocused ? "blue" : "gray"} paddingX={1}>
       <Box marginBottom={1}>
-        <Text bold color={isFocused ? "blue" : "white"}>
+        <Text bold color={isFocused ? "blue" : "white"} wrap="truncate">
           Changed Files ({files.length})
         </Text>
       </Box>
@@ -56,14 +83,16 @@ export default function FileList({ files, selectedIndex, onSelect, onOpen }: Fil
         files.map((file, i) => {
           const isSelected = i === selectedIndex;
           const color = statusColors[file.status];
+          const label = `${statusLabels[file.status]} ${file.path}`;
           return (
             <Box key={file.path}>
               <Text
                 color={color}
                 bold={isSelected}
                 inverse={isSelected && isFocused}
+                wrap="truncate"
               >
-                {statusLabels[file.status]} {file.path}
+                {truncate(label, maxTextWidth)}
               </Text>
             </Box>
           );
