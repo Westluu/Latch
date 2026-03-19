@@ -2,6 +2,7 @@
 
 import { isInsideTmux, splitAndLaunchSidecar, launchNewSession } from "./tmux.js";
 import { sendIpcMessage } from "./ipc.js";
+import { initHook, removeHook } from "./init.js";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -13,6 +14,8 @@ latch — terminal sidecar for agent workflows
 Usage:
   latch              Open sidecar in a tmux pane
   latch open <file>  Open a file in the sidecar preview
+  latch init         Add Claude Code hook (auto-open files on edit)
+  latch remove       Remove the Claude Code hook
   latch --help       Show this help message
   latch --version    Show version
 `);
@@ -21,6 +24,16 @@ Usage:
 
 if (args.includes("--version") || args.includes("-v")) {
   console.log("latch v0.1.0");
+  process.exit(0);
+}
+
+if (command === "init") {
+  initHook();
+  process.exit(0);
+}
+
+if (command === "remove") {
+  removeHook();
   process.exit(0);
 }
 
