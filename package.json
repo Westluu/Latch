@@ -1,0 +1,40 @@
+{
+  "name": "latch",
+  "version": "0.1.0",
+  "description": "Terminal sidecar for agent-driven CLI workflows",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "latch": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "dev:ui": "tsx src/sidecar.tsx",
+    "start": "node dist/cli.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Westluu/Latch.git"
+  },
+  "keywords": ["terminal", "sidecar", "tui", "agent", "claude-code"],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Westluu/Latch/issues"
+  },
+  "homepage": "https://github.com/Westluu/Latch#readme",
+  "dependencies": {
+    "chokidar": "^5.0.0",
+    "cli-highlight": "^2.1.11",
+    "ink": "^6.8.0",
+    "react": "^19.2.4",
+    "simple-git": "^3.33.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "@types/react": "^19.2.14",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
