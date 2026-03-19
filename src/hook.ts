@@ -22,7 +22,7 @@ process.stdin.on("end", async () => {
       ? filePath.slice(cwd.length + 1)
       : filePath;
 
-    await sendIpcMessage({ type: "open", filePath: relative });
+    await sendIpcMessage(cwd, { type: "open", filePath: relative });
   } catch {
     // Silently fail — don't break Claude Code
   }

@@ -48,7 +48,7 @@ if (command === "open") {
 
   // Try sending first; if sidecar isn't running, launch it and retry
   try {
-    const response = await sendIpcMessage({ type: "open", filePath });
+    const response = await sendIpcMessage(cwd, { type: "open", filePath });
     console.log(response);
     process.exit(0);
   } catch {
@@ -66,7 +66,7 @@ if (command === "open") {
     for (let i = 0; i < 10; i++) {
       await sleep(500);
       try {
-        const response = await sendIpcMessage({ type: "open", filePath });
+        const response = await sendIpcMessage(cwd, { type: "open", filePath });
         console.log(response);
         process.exit(0);
       } catch {
