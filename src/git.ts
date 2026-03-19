@@ -1,10 +1,19 @@
-import { execSync } from "node:child_process";
+import { execSync, exec } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { FileEntry } from "./ui/FileList.js";
 
 function run(cmd: string, cwd: string): string {
   return execSync(cmd, { cwd, encoding: "utf-8" }).trim();
+}
+
+function runAsync(cmd: string, cwd: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    exec(cmd, { cwd, encoding: "utf-8" }, (err, stdout) => {
+      if (err) reject(err);
+      else resolve((stdout ?? "").trim());
+    });
+  });
 }
 
 const statusMap: Record<string, FileEntry["status"]> = {
@@ -19,20 +28,32 @@ const statusMap: Record<string, FileEntry["status"]> = {
 export function getChangedFiles(cwd: string): FileEntry[] {
   try {
     const output = run("git status --porcelain", cwd);
-    if (!output) return [];
-
-    return output
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        const xy = line.slice(0, 2).trim();
-        const path = line.slice(3);
-        const status = statusMap[xy] ?? "modified";
-        return { path, status };
-      });
+    return parseStatus(output);
   } catch {
     return [];
   }
+}
+
+export async function getChangedFilesAsync(cwd: string): Promise<FileEntry[]> {
+  try {
+    const output = await runAsync("git status --porcelain", cwd);
+    return parseStatus(output);
+  } catch {
+    return [];
+  }
+}
+
+function parseStatus(output: string): FileEntry[] {
+  if (!output) return [];
+  return output
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const xy = line.slice(0, 2).trim();
+      const path = line.slice(3);
+      const status = statusMap[xy] ?? "modified";
+      return { path, status };
+    });
 }
 
 export function readFile(cwd: string, filePath: string): string | null {

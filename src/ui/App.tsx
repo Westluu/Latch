@@ -3,7 +3,7 @@ import { Box, Text, useApp, useInput, useStdout, useFocusManager } from "ink";
 import FileList, { type FileEntry } from "./FileList.js";
 import Preview from "./Preview.js";
 import StatusBar from "./StatusBar.js";
-import { getChangedFiles, readFile, getDiff } from "../git.js";
+import { getChangedFiles, getChangedFilesAsync, readFile, getDiff } from "../git.js";
 import { cleanupMouseTracking } from "./useMouse.js";
 
 interface AppProps {
@@ -32,8 +32,7 @@ export default function App({ cwd, onFileOpen }: AppProps) {
   const { focusNext, focusPrevious } = useFocusManager();
 
   useEffect(() => {
-    const changed = getChangedFiles(cwd);
-    setFiles(changed);
+    getChangedFilesAsync(cwd).then(setFiles);
   }, [cwd]);
 
   useEffect(() => {
