@@ -1,9 +1,21 @@
 import { createServer, connect, type Server } from "node:net";
-import { existsSync, unlinkSync, appendFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, unlinkSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
-const LOG_PATH = "/tmp/latch.log";
+function getSocketDir(): string {
+  const dir = process.env.XDG_RUNTIME_DIR
+    ? join(process.env.XDG_RUNTIME_DIR, "latch")
+    : join(tmpdir(), "latch");
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
 
-const SOCKET_PATH = "/tmp/latch.sock";
+export function getSocketPath(cwd: string): string {
+  const hash = createHash("sha256").update(cwd).digest("hex").slice(0, 12);
+  return join(getSocketDir(), `${hash}.sock`);
+}
 
 export type IpcMessage = {
   type: "open";
@@ -12,53 +24,46 @@ export type IpcMessage = {
 
 type MessageHandler = (msg: IpcMessage) => void;
 
-export function startIpcServer(onMessage: MessageHandler): Server {
+export function startIpcServer(cwd: string, onMessage: MessageHandler): Server {
+  const socketPath = getSocketPath(cwd);
+
   // Clean up stale socket
-  if (existsSync(SOCKET_PATH)) {
-    unlinkSync(SOCKET_PATH);
+  if (existsSync(socketPath)) {
+    unlinkSync(socketPath);
   }
 
-  const log = (msg: string) => {
-    const line = `[latch-ipc] ${new Date().toISOString()} ${msg}\n`;
-    appendFileSync(LOG_PATH, line);
-  };
-
   const server = createServer((socket) => {
-    log("client connected");
     let buffer = "";
     socket.on("data", (data) => {
-      const raw = data.toString();
-      log(`raw data received: ${JSON.stringify(raw)}`);
-      buffer += raw;
+      buffer += data.toString();
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
-      log(`parsed ${lines.length} lines, buffer remaining: ${JSON.stringify(buffer)}`);
       for (const line of lines) {
         if (!line.trim()) continue;
         try {
           const msg = JSON.parse(line) as IpcMessage;
-          log(`parsed message: ${msg.type} → ${msg.filePath}`);
           onMessage(msg);
           socket.write("ok\n");
-          log("sent ok response");
-        } catch (e) {
-          log(`parse error: ${e}`);
+        } catch {
           socket.write("error: invalid json\n");
         }
       }
     });
-    socket.on("end", () => log("client disconnected"));
-    socket.on("error", (err) => log(`socket error: ${err.message}`));
   });
 
-  server.listen(SOCKET_PATH, () => {
-    log(`server listening on ${SOCKET_PATH}`);
+  server.listen(socketPath, () => {
+    console.error(`[latch] IPC server listening on ${socketPath}`);
+  });
+
+  server.on("error", (err) => {
+    console.error(`[latch] IPC server error: ${err.message}`);
+    process.exit(1);
   });
 
   const cleanup = () => {
     try {
       server.close();
-      if (existsSync(SOCKET_PATH)) unlinkSync(SOCKET_PATH);
+      if (existsSync(socketPath)) unlinkSync(socketPath);
     } catch {}
   };
   process.on("exit", cleanup);
@@ -68,14 +73,15 @@ export function startIpcServer(onMessage: MessageHandler): Server {
   return server;
 }
 
-export function sendIpcMessage(msg: IpcMessage): Promise<string> {
+export function sendIpcMessage(cwd: string, msg: IpcMessage): Promise<string> {
+  const socketPath = getSocketPath(cwd);
   return new Promise((resolve, reject) => {
-    if (!existsSync(SOCKET_PATH)) {
+    if (!existsSync(socketPath)) {
       reject(new Error("Latch sidecar is not running. Start it with: latch"));
       return;
     }
 
-    const socket = connect(SOCKET_PATH);
+    const socket = connect(socketPath);
     let response = "";
 
     socket.on("connect", () => {

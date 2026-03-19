@@ -6,7 +6,7 @@ const SETTINGS_PATH = join(homedir(), ".claude", "settings.json");
 const HOOK_MARKER = "latch-hook";
 
 function getHookCommand(): string {
-  const hookScript = resolve(import.meta.dirname, "hook.cjs");
+  const hookScript = resolve(import.meta.dirname, "hook.js");
   return `node "${hookScript}"`;
 }
 

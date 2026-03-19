@@ -8,10 +8,10 @@
     "latch": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "npx tsc",
     "bundle": "node scripts/bundle.mjs",
-    "dev": "tsx src/cli.ts",
-    "dev:ui": "tsx src/sidecar.tsx",
+    "dev": "npx tsx src/cli.ts",
+    "dev:ui": "npx tsx src/sidecar.tsx",
     "start": "node dist/cli.js"
   },
   "repository": {

@@ -1,4 +1,5 @@
 import { execSync, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -16,11 +17,29 @@ export function getSessionName(): string {
   return run("tmux display-message -p '#S'");
 }
 
+function sidecarCommand(cwd: string): string {
+  // When bundled, __dirname is dist/ and sidecar.js is right next to us.
+  // When run via tsx in development, __dirname is src/ and sidecar.js doesn't
+  // exist there — fall back to the dist bundle or tsx.
+  const distSidecar = join(__dirname, "sidecar.js");
+  if (existsSync(distSidecar)) {
+    return `node "${distSidecar}" "${cwd}"`;
+  }
+  // Dev fallback: use the dist build from the project root if available
+  const rootDistSidecar = join(__dirname, "..", "dist", "sidecar.js");
+  if (existsSync(rootDistSidecar)) {
+    return `node "${rootDistSidecar}" "${cwd}"`;
+  }
+  // Last resort: run the source directly via tsx
+  const tsxBin = join(__dirname, "..", "node_modules", ".bin", "tsx");
+  const sidecarSrc = join(__dirname, "sidecar.tsx");
+  return `"${tsxBin}" "${sidecarSrc}" "${cwd}"`;
+}
+
 export function splitAndLaunchSidecar(cwd: string): string {
-  const sidecarScript = join(__dirname, "sidecar.tsx");
   // Split horizontally (left/right), sidecar takes 40% width on the right
   const paneId = run(
-    `tmux split-window -h -l 40% -P -F '#{pane_id}' -c '${cwd}' 'npx tsx ${sidecarScript} ${cwd}'`
+    `tmux split-window -h -l 40% -P -F '#{pane_id}' -c '${cwd}' '${sidecarCommand(cwd)}'`
   );
   // Move focus back to the left pane (the user's shell)
   run("tmux select-pane -L");
@@ -28,14 +47,13 @@ export function splitAndLaunchSidecar(cwd: string): string {
 }
 
 export function launchNewSession(cwd: string): void {
-  const sidecarScript = join(__dirname, "sidecar.tsx");
   const sessionName = "latch";
 
   // Create session with user's shell
   run(`tmux new-session -d -s ${sessionName} -c '${cwd}'`);
   // Split and launch sidecar on the right
   run(
-    `tmux split-window -h -l 40% -t ${sessionName} -c '${cwd}' 'npx tsx ${sidecarScript} ${cwd}'`
+    `tmux split-window -h -l 40% -t ${sessionName} -c '${cwd}' '${sidecarCommand(cwd)}'`
   );
   // Focus the left pane
   run(`tmux select-pane -t ${sessionName}:.0`);

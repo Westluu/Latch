@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Box, Text, useApp, useInput, useStdout, useFocusManager } from "ink";
 import FileList, { type FileEntry } from "./FileList.js";
 import Preview from "./Preview.js";
 import StatusBar from "./StatusBar.js";
 import { getChangedFiles, getChangedFilesAsync, readFile, getDiff } from "../git.js";
-import { cleanupMouseTracking } from "./useMouse.js";
+import { cleanupMouseTracking, useMouse, type MouseEvt } from "./useMouse.js";
 
 interface AppProps {
   cwd: string;
@@ -31,6 +31,20 @@ export default function App({ cwd, onFileOpen }: AppProps) {
 
   const { focusNext, focusPrevious } = useFocusManager();
 
+  const quit = useCallback(() => {
+    cleanupMouseTracking();
+    exit();
+    process.exit(0);
+  }, [exit]);
+
+  // [✕] sits at the start of the FileList title row:
+  // y=1 (row 0 = top border), x=2-4 (border + padding + "[✕]")
+  useMouse(useCallback((evt: MouseEvt) => {
+    if (evt.action === "down" && evt.button === 0 && evt.y === 1 && evt.x >= 2 && evt.x <= 4) {
+      quit();
+    }
+  }, [quit]));
+
   useEffect(() => {
     getChangedFilesAsync(cwd).then(setFiles);
   }, [cwd]);
@@ -52,8 +66,7 @@ export default function App({ cwd, onFileOpen }: AppProps) {
 
   useInput((input, key) => {
     if (input === "q") {
-      cleanupMouseTracking();
-      exit();
+      quit();
     }
     if (key.tab) {
       if (key.shift) {
@@ -104,6 +117,7 @@ export default function App({ cwd, onFileOpen }: AppProps) {
             selectedIndex={selectedIndex}
             onSelect={setSelectedIndex}
             onOpen={handleOpen}
+            onClose={quit}
             paneWidth={fileListWidth}
             startRow={fileListStartRow}
           />

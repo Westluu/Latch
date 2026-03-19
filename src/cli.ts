@@ -9,11 +9,11 @@ const command = args[0];
 
 if (args.includes("--help") || args.includes("-h")) {
   console.log(`
-latch — terminal sidecar for agent workflows
+latch — terminal viewer for agent workflows
 
 Usage:
-  latch              Open sidecar in a tmux pane
-  latch open <file>  Open a file in the sidecar preview
+  latch              Open Latch in a tmux pane
+  latch open <file>  Open a file in the Latch preview
   latch init         Add Claude Code hook (auto-open files on edit)
   latch remove       Remove the Claude Code hook
   latch --help       Show this help message
@@ -48,16 +48,16 @@ if (command === "open") {
 
   // Try sending first; if sidecar isn't running, launch it and retry
   try {
-    const response = await sendIpcMessage({ type: "open", filePath });
+    const response = await sendIpcMessage(cwd, { type: "open", filePath });
     console.log(response);
     process.exit(0);
   } catch {
     // Sidecar not running — launch it
     if (isInsideTmux()) {
-      console.log("Latch: starting sidecar...");
+      console.log("Latch: starting...");
       splitAndLaunchSidecar(cwd);
     } else {
-      console.error("Latch: not in tmux. Run 'latch' first to start the sidecar.");
+      console.error("Latch: not in tmux. Run 'latch' first to start.");
       process.exit(1);
     }
 
@@ -66,14 +66,14 @@ if (command === "open") {
     for (let i = 0; i < 10; i++) {
       await sleep(500);
       try {
-        const response = await sendIpcMessage({ type: "open", filePath });
+        const response = await sendIpcMessage(cwd, { type: "open", filePath });
         console.log(response);
         process.exit(0);
       } catch {
         // Keep waiting
       }
     }
-    console.error("Latch: timed out waiting for sidecar to start.");
+    console.error("Latch: timed out waiting to start.");
     process.exit(1);
   }
 }
@@ -81,9 +81,9 @@ if (command === "open") {
 const cwd = process.cwd();
 
 if (isInsideTmux()) {
-  console.log("Latch: opening sidecar pane...");
+  console.log("Latch: opening pane...");
   const paneId = splitAndLaunchSidecar(cwd);
-  console.log(`Latch: sidecar running in pane ${paneId}`);
+  console.log(`Latch: running in pane ${paneId}`);
 } else {
   console.log("Latch: not inside tmux, creating new session...");
   launchNewSession(cwd);

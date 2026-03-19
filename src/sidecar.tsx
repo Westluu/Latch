@@ -20,7 +20,7 @@ function notifyHandlers(filePath: string) {
   }
 }
 
-startIpcServer((msg) => {
+startIpcServer(cwd, (msg) => {
   if (msg.type === "open") {
     notifyHandlers(msg.filePath);
   }
