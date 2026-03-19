@@ -16,11 +16,15 @@ export function getSessionName(): string {
   return run("tmux display-message -p '#S'");
 }
 
+function sidecarCommand(cwd: string): string {
+  const sidecarScript = join(__dirname, "sidecar.js");
+  return `node "${sidecarScript}" "${cwd}"`;
+}
+
 export function splitAndLaunchSidecar(cwd: string): string {
-  const sidecarScript = join(__dirname, "sidecar.tsx");
   // Split horizontally (left/right), sidecar takes 40% width on the right
   const paneId = run(
-    `tmux split-window -h -l 40% -P -F '#{pane_id}' -c '${cwd}' 'npx tsx ${sidecarScript} ${cwd}'`
+    `tmux split-window -h -l 40% -P -F '#{pane_id}' -c '${cwd}' '${sidecarCommand(cwd)}'`
   );
   // Move focus back to the left pane (the user's shell)
   run("tmux select-pane -L");
@@ -28,14 +32,13 @@ export function splitAndLaunchSidecar(cwd: string): string {
 }
 
 export function launchNewSession(cwd: string): void {
-  const sidecarScript = join(__dirname, "sidecar.tsx");
   const sessionName = "latch";
 
   // Create session with user's shell
   run(`tmux new-session -d -s ${sessionName} -c '${cwd}'`);
   // Split and launch sidecar on the right
   run(
-    `tmux split-window -h -l 40% -t ${sessionName} -c '${cwd}' 'npx tsx ${sidecarScript} ${cwd}'`
+    `tmux split-window -h -l 40% -t ${sessionName} -c '${cwd}' '${sidecarCommand(cwd)}'`
   );
   // Focus the left pane
   run(`tmux select-pane -t ${sessionName}:.0`);
