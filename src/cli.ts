@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { isInsideTmux, splitAndLaunchSidecar, launchNewSession } from "./tmux.js";
+import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSession } from "./tmux.js";
 import { sendIpcMessage } from "./ipc.js";
 import { initHook, removeHook } from "./init.js";
 
@@ -29,6 +29,18 @@ if (args.includes("--version") || args.includes("-v")) {
 
 if (command === "init") {
   initHook();
+  process.exit(0);
+}
+
+if (command === "tray") {
+  const cwd = process.cwd();
+  if (isInsideTmux()) {
+    const paneId = splitAndLaunchTray(cwd);
+    console.log(`Latch tray: running in pane ${paneId}`);
+  } else {
+    console.error("latch tray: must be run inside a tmux session.");
+    process.exit(1);
+  }
   process.exit(0);
 }
 

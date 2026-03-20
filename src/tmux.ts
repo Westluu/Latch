@@ -17,6 +17,26 @@ export function getSessionName(): string {
   return run("tmux display-message -p '#S'");
 }
 
+function trayCommand(cwd: string): string {
+  const distTray = join(__dirname, "tray.js");
+  if (existsSync(distTray)) return `node "${distTray}" "${cwd}"`;
+  const rootDistTray = join(__dirname, "..", "dist", "tray.js");
+  if (existsSync(rootDistTray)) return `node "${rootDistTray}" "${cwd}"`;
+  const tsxBin = join(__dirname, "..", "node_modules", ".bin", "tsx");
+  const traySrc = join(__dirname, "tray.tsx");
+  return `"${tsxBin}" "${traySrc}" "${cwd}"`;
+}
+
+export function splitAndLaunchTray(cwd: string): string {
+  // Split vertically (top/bottom), tray takes 10 lines at the bottom
+  const paneId = run(
+    `tmux split-window -v -l 10 -P -F '#{pane_id}' -c '${cwd}' '${trayCommand(cwd)}'`
+  );
+  // Move focus back to the pane above
+  run("tmux select-pane -U");
+  return paneId;
+}
+
 function sidecarCommand(cwd: string): string {
   // When bundled, __dirname is dist/ and sidecar.js is right next to us.
   // When run via tsx in development, __dirname is src/ and sidecar.js doesn't

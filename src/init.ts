@@ -10,6 +10,11 @@ function getHookCommand(): string {
   return `node "${hookScript}"`;
 }
 
+function getStopHookCommand(): string {
+  const hookScript = resolve(import.meta.dirname, "stop-hook.js");
+  return `node "${hookScript}"`;
+}
+
 function readSettings(): any {
   if (!existsSync(SETTINGS_PATH)) {
     return {};
@@ -34,6 +39,14 @@ function hasLatchHook(settings: any): boolean {
   );
 }
 
+function hasLatchStopHook(settings: any): boolean {
+  const stop = settings.hooks?.Stop;
+  if (!Array.isArray(stop)) return false;
+  return stop.some(
+    (entry: any) => entry.hooks?.some((h: any) => h.command?.includes("stop-hook"))
+  );
+}
+
 export function initHook(): void {
   const settings = readSettings();
 
@@ -43,42 +56,54 @@ export function initHook(): void {
   }
 
   if (!settings.hooks) settings.hooks = {};
-  if (!Array.isArray(settings.hooks.PostToolUse)) settings.hooks.PostToolUse = [];
 
-  settings.hooks.PostToolUse.push({
-    matcher: "Write|Edit",
-    hooks: [
-      {
-        type: "command",
-        command: getHookCommand(),
-        timeout: 30,
-      },
-    ],
-  });
+  if (!hasLatchHook(settings)) {
+    if (!Array.isArray(settings.hooks.PostToolUse)) settings.hooks.PostToolUse = [];
+    settings.hooks.PostToolUse.push({
+      matcher: "Write|Edit",
+      hooks: [{ type: "command", command: getHookCommand(), timeout: 30 }],
+    });
+  }
+
+  if (!hasLatchStopHook(settings)) {
+    if (!Array.isArray(settings.hooks.Stop)) settings.hooks.Stop = [];
+    settings.hooks.Stop.push({
+      hooks: [{ type: "command", command: getStopHookCommand(), timeout: 30 }],
+    });
+  }
 
   writeSettings(settings);
-  console.log("Latch hook added to Claude Code.");
-  console.log("Files created or edited by Claude will now auto-open in the sidecar.");
+  console.log("Latch hooks added to Claude Code.");
 }
 
 export function removeHook(): void {
   const settings = readSettings();
 
-  if (!hasLatchHook(settings)) {
-    console.log("No Latch hook found in Claude Code settings.");
+  let removed = false;
+
+  if (hasLatchHook(settings)) {
+    settings.hooks.PostToolUse = settings.hooks.PostToolUse.filter(
+      (entry: any) =>
+        entry._id !== HOOK_MARKER &&
+        !entry.hooks?.some((h: any) => h.command?.includes("latch") && h.command?.includes("hook"))
+    );
+    if (settings.hooks.PostToolUse.length === 0) delete settings.hooks.PostToolUse;
+    removed = true;
+  }
+
+  if (hasLatchStopHook(settings)) {
+    settings.hooks.Stop = settings.hooks.Stop.filter(
+      (entry: any) => !entry.hooks?.some((h: any) => h.command?.includes("stop-hook"))
+    );
+    if (settings.hooks.Stop.length === 0) delete settings.hooks.Stop;
+    removed = true;
+  }
+
+  if (!removed) {
+    console.log("No Latch hooks found in Claude Code settings.");
     return;
   }
 
-  settings.hooks.PostToolUse = settings.hooks.PostToolUse.filter(
-    (entry: any) =>
-      entry._id !== HOOK_MARKER &&
-      !entry.hooks?.some((h: any) => h.command?.includes("latch") && h.command?.includes("hook"))
-  );
-
-  if (settings.hooks.PostToolUse.length === 0) {
-    delete settings.hooks.PostToolUse;
-  }
-
   writeSettings(settings);
-  console.log("Latch hook removed from Claude Code.");
+  console.log("Latch hooks removed from Claude Code.");
 }

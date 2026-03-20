@@ -2,7 +2,18 @@
 // Claude Code PostToolUse hook for Latch
 // Receives tool use data via stdin, sends file path to sidecar via IPC
 
+import { appendFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import { sendIpcMessage } from "./ipc.js";
+
+function getPendingFilePath(cwd: string): string {
+  const hash = createHash("sha256").update(cwd).digest("hex").slice(0, 12);
+  const dir = join(tmpdir(), "latch");
+  mkdirSync(dir, { recursive: true });
+  return join(dir, `${hash}-pending.txt`);
+}
 
 let input = "";
 const timeout = setTimeout(() => process.exit(0), 5000);
@@ -21,6 +32,9 @@ process.stdin.on("end", async () => {
     const relative = filePath.startsWith(cwd + "/")
       ? filePath.slice(cwd.length + 1)
       : filePath;
+
+    // Track file for the current pending turn
+    appendFileSync(getPendingFilePath(cwd), relative + "\n");
 
     await sendIpcMessage(cwd, { type: "open", filePath: relative });
   } catch {

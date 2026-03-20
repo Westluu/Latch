@@ -17,20 +17,30 @@ export function getSocketPath(cwd: string): string {
   return join(getSocketDir(), `${hash}.sock`);
 }
 
+export function getTraySocketPath(cwd: string): string {
+  const hash = createHash("sha256").update(cwd).digest("hex").slice(0, 12);
+  return join(getSocketDir(), `${hash}-tray.sock`);
+}
+
 export type IpcMessage = {
   type: "open";
   filePath: string;
 };
 
-type MessageHandler = (msg: IpcMessage) => void;
+export type TrayMessage = {
+  type: "turn";
+  label: string;
+  files: string[];
+  diffStats: { added: number; removed: number };
+};
 
-export function startIpcServer(cwd: string, onMessage: MessageHandler): Server {
-  const socketPath = getSocketPath(cwd);
+// ── shared internals ────────────────────────────────────────────────────────
 
-  // Clean up stale socket
-  if (existsSync(socketPath)) {
-    unlinkSync(socketPath);
-  }
+function startServerOnSocket<T>(
+  socketPath: string,
+  onMessage: (msg: T) => void
+): Server {
+  if (existsSync(socketPath)) unlinkSync(socketPath);
 
   const server = createServer((socket) => {
     let buffer = "";
@@ -41,7 +51,7 @@ export function startIpcServer(cwd: string, onMessage: MessageHandler): Server {
       for (const line of lines) {
         if (!line.trim()) continue;
         try {
-          const msg = JSON.parse(line) as IpcMessage;
+          const msg = JSON.parse(line) as T;
           onMessage(msg);
           socket.write("ok\n");
         } catch {
@@ -73,11 +83,10 @@ export function startIpcServer(cwd: string, onMessage: MessageHandler): Server {
   return server;
 }
 
-export function sendIpcMessage(cwd: string, msg: IpcMessage): Promise<string> {
-  const socketPath = getSocketPath(cwd);
+function sendToSocket<T>(socketPath: string, msg: T): Promise<string> {
   return new Promise((resolve, reject) => {
     if (!existsSync(socketPath)) {
-      reject(new Error("Latch sidecar is not running. Start it with: latch"));
+      reject(new Error("Latch is not running on this socket."));
       return;
     }
 
@@ -93,12 +102,27 @@ export function sendIpcMessage(cwd: string, msg: IpcMessage): Promise<string> {
       socket.end();
     });
 
-    socket.on("end", () => {
-      resolve(response.trim());
-    });
-
-    socket.on("error", (err) => {
-      reject(new Error(`Cannot connect to Latch sidecar: ${err.message}`));
-    });
+    socket.on("end", () => resolve(response.trim()));
+    socket.on("error", (err) => reject(new Error(`Cannot connect: ${err.message}`)));
   });
+}
+
+// ── sidecar IPC ─────────────────────────────────────────────────────────────
+
+export function startIpcServer(cwd: string, onMessage: (msg: IpcMessage) => void): Server {
+  return startServerOnSocket(getSocketPath(cwd), onMessage);
+}
+
+export function sendIpcMessage(cwd: string, msg: IpcMessage): Promise<string> {
+  return sendToSocket(getSocketPath(cwd), msg);
+}
+
+// ── tray IPC ─────────────────────────────────────────────────────────────────
+
+export function startTrayIpcServer(cwd: string, onMessage: (msg: TrayMessage) => void): Server {
+  return startServerOnSocket(getTraySocketPath(cwd), onMessage);
+}
+
+export function sendTrayMessage(cwd: string, msg: TrayMessage): Promise<string> {
+  return sendToSocket(getTraySocketPath(cwd), msg);
 }
