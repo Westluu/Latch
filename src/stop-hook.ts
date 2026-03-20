@@ -1,29 +1,36 @@
 #!/usr/bin/env node
 // Claude Code Stop hook for Latch
-// Fires when Claude's turn ends. Sends turn data to the tray via IPC,
-// launching the tray pane first if it isn't already running.
+// Fires when Claude's turn ends. Reads the session JSONL to diff consecutive
+// turn-boundary snapshots, then sends the turn to the tray via IPC.
 
-import { readFileSync, unlinkSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
-import { join, resolve, dirname } from "node:path";
+import { join, resolve, dirname, relative } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { getTraySocketPath, sendTrayMessage } from "./ipc.js";
+import { getTraySocketPath, sendTrayMessage, type TurnFile } from "./ipc.js";
+import { getSidecarPaneId } from "./tmux.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-function getPendingFilePath(cwd: string): string {
-  const hash = createHash("sha256").update(cwd).digest("hex").slice(0, 12);
-  const dir = join(tmpdir(), "latch");
-  mkdirSync(dir, { recursive: true });
-  return join(dir, `${hash}-pending.txt`);
-}
+// ── JSONL snapshot types ─────────────────────────────────────────────────────
 
-function getSidecarPanePath(cwd: string): string {
-  const hash = createHash("sha256").update(cwd).digest("hex").slice(0, 12);
-  return join(tmpdir(), "latch", `${hash}-sidecar-pane.txt`);
-}
+type BackupEntry = {
+  backupFileName: string | null;
+  version: number;
+  backupTime: string;
+};
+
+type SnapshotEntry = {
+  type: "file-history-snapshot";
+  messageId: string;
+  isSnapshotUpdate: boolean;
+  snapshot: {
+    trackedFileBackups: Record<string, BackupEntry>;
+  };
+};
+
+// ── helpers ──────────────────────────────────────────────────────────────────
 
 function trayCommand(cwd: string): string {
   const distTray = resolve(__dirname, "tray.js");
@@ -35,9 +42,75 @@ function trayCommand(cwd: string): string {
   return `"${tsxBin}" "${traySrc}" "${cwd}"`;
 }
 
-function getDiffStats(cwd: string): { added: number; removed: number } {
+// Parse the session JSONL and return only file-history-snapshot entries
+function parseSnapshots(transcriptPath: string): SnapshotEntry[] {
+  const lines = readFileSync(transcriptPath, "utf-8").trim().split("\n");
+  const snapshots: SnapshotEntry[] = [];
+  for (const line of lines) {
+    try {
+      const obj = JSON.parse(line);
+      if (obj.type === "file-history-snapshot") snapshots.push(obj as SnapshotEntry);
+    } catch {}
+  }
+  return snapshots;
+}
+
+// Get the session ID from the transcript path (the JSONL filename without extension)
+function sessionIdFromTranscript(transcriptPath: string): string {
+  return transcriptPath.replace(/\.jsonl$/, "").split("/").pop() ?? "";
+}
+
+// Resolve a backupFileName to its full path on disk
+function backupPath(sessionId: string, backupFileName: string): string {
+  return join(homedir(), ".claude", "file-history", sessionId, backupFileName);
+}
+
+// Diff the last false (prev turn state) vs last true (current turn state)
+// to find what changed in the current turn.
+//
+// NOTE: isSnapshotUpdate=false is written when the NEXT user message arrives,
+// not when the turn ends. So at Stop hook time, only true entries exist for
+// the current turn. We use lastTrue vs lastFalse to detect this turn's changes.
+function getTurnFiles(snapshots: SnapshotEntry[], sessionId: string): TurnFile[] {
+  const lastFalse = snapshots.filter((s) => !s.isSnapshotUpdate).at(-1);
+  const lastTrue  = snapshots.filter((s) =>  s.isSnapshotUpdate).at(-1);
+
+  if (!lastTrue) return []; // no file edits this turn
+
+  const prevFiles = lastFalse?.snapshot.trackedFileBackups ?? {};
+  const currFiles = lastTrue.snapshot.trackedFileBackups;
+
+  const changed: TurnFile[] = [];
+
+  for (const [filePath, curr] of Object.entries(currFiles)) {
+    const prev = prevFiles[filePath];
+
+    // Skip files not changed in this turn (version unchanged vs prev false boundary)
+    if (prev && curr.version === prev.version) continue;
+
+    // curr.backupFileName = backup created BEFORE this turn's first edit to this file
+    // null means the file was created this turn (no before-state) → revert = delete
+    changed.push({
+      path: filePath,
+      backupFile: curr.backupFileName ? backupPath(sessionId, curr.backupFileName) : null,
+      isNew: curr.backupFileName === null,
+    });
+  }
+
+  return changed;
+}
+
+function getDiffStats(
+  cwd: string,
+  files: TurnFile[]
+): { added: number; removed: number } {
   try {
-    const out = execSync("git diff --numstat HEAD", { cwd, encoding: "utf-8" });
+    const paths = files.map((f) => relative(cwd, f.path)).filter(Boolean);
+    if (paths.length === 0) return { added: 0, removed: 0 };
+    const out = execSync(
+      `git diff --numstat HEAD -- ${paths.map((p) => JSON.stringify(p)).join(" ")}`,
+      { cwd, encoding: "utf-8" }
+    );
     let added = 0, removed = 0;
     for (const line of out.trim().split("\n")) {
       const [a, r] = line.split("\t");
@@ -50,26 +123,29 @@ function getDiffStats(cwd: string): { added: number; removed: number } {
   }
 }
 
-function extractSummary(data: Record<string, unknown>): string {
-  const transcript = data.transcript as Array<{ role: string; content: unknown }> | undefined;
-  if (!Array.isArray(transcript)) return "";
-  for (let i = transcript.length - 1; i >= 0; i--) {
-    const msg = transcript[i];
-    if (msg?.role !== "assistant") continue;
-    const content = msg.content;
-    const text =
-      typeof content === "string"
-        ? content
-        : Array.isArray(content)
-        ? (content.find((b: Record<string, unknown>) => b?.type === "text") as Record<string, unknown>)?.text as string ?? ""
-        : "";
-    const first = text.split("\n").find((l) => l.trim());
-    if (first) return first.trim().slice(0, 60);
-  }
+function extractLabel(transcriptPath: string): string {
+  try {
+    const lines = readFileSync(transcriptPath, "utf-8").trim().split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const obj = JSON.parse(lines[i]);
+      if (obj.type !== "assistant") continue;
+      const content = obj.message?.content;
+      const text =
+        typeof content === "string"
+          ? content
+          : Array.isArray(content)
+          ? (content.find((b: Record<string, unknown>) => b?.type === "text") as Record<string, unknown>)?.text as string ?? ""
+          : "";
+      const first = text.split("\n").find((l: string) => l.trim());
+      if (first) return first.trim().slice(0, 60);
+    }
+  } catch {}
   return "";
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// ── main ─────────────────────────────────────────────────────────────────────
 
 let input = "";
 const timeout = setTimeout(() => process.exit(0), 10000);
@@ -81,41 +157,36 @@ process.stdin.on("end", async () => {
   try {
     const data = JSON.parse(input) as Record<string, unknown>;
     const cwd = (data.cwd as string) || process.cwd();
-    const pendingPath = getPendingFilePath(cwd);
+    const transcriptPath = data.transcript_path as string | undefined;
 
-    if (!existsSync(pendingPath)) process.exit(0);
+    if (!transcriptPath || !existsSync(transcriptPath)) process.exit(0);
 
-    const raw = readFileSync(pendingPath, "utf-8").trim();
-    unlinkSync(pendingPath);
+    const sessionId = sessionIdFromTranscript(transcriptPath);
+    const snapshots = parseSnapshots(transcriptPath);
+    const files = getTurnFiles(snapshots, sessionId);
 
-    const files = [...new Set(raw.split("\n").filter(Boolean))];
     if (files.length === 0) process.exit(0);
 
-    const diffStats = getDiffStats(cwd);
-    const summary = extractSummary(data) || `${files.length} file${files.length !== 1 ? "s" : ""} changed`;
+    const label = extractLabel(transcriptPath) || `${files.length} file${files.length !== 1 ? "s" : ""} changed`;
+    const diffStats = getDiffStats(cwd, files);
 
     const traySocket = getTraySocketPath(cwd);
     const trayRunning = existsSync(traySocket);
 
-    // Launch tray pane if not running (requires tmux)
     if (!trayRunning && process.env.TMUX) {
-      const sidecarPanePath = getSidecarPanePath(cwd);
-      const sidecarPane = existsSync(sidecarPanePath)
-        ? readFileSync(sidecarPanePath, "utf-8").trim()
-        : null;
-      // If sidecar is open, split above it (-b) so tray sits at the top of the sidecar column
-      const splitTarget = sidecarPane ? `-b -t ${sidecarPane}` : "";
+      const sidecarPane = getSidecarPaneId(cwd);
+      // If sidecar is open, split above it (-b) so tray sits on top of the file viewer
+      const targetFlag = sidecarPane ? `-b -t ${sidecarPane}` : "";
       execSync(
-        `tmux split-window -v -l 10 ${splitTarget} -c ${JSON.stringify(cwd)} '${trayCommand(cwd)}'`
+        `tmux split-window -v -l 10 ${targetFlag} -c ${JSON.stringify(cwd)} '${trayCommand(cwd)}'`
       );
-      // Wait for the IPC socket to appear (up to 4s)
       for (let i = 0; i < 8; i++) {
         await sleep(500);
         if (existsSync(traySocket)) break;
       }
     }
 
-    await sendTrayMessage(cwd, { type: "turn", label: summary, files, diffStats });
+    await sendTrayMessage(cwd, { type: "turn", label, files, diffStats });
   } catch {
     // Silently fail — don't break Claude Code
   }

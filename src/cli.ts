@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSession } from "./tmux.js";
+import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSession, saveSidecarPaneId } from "./tmux.js";
 import { sendIpcMessage } from "./ipc.js";
 import { initHook, removeHook } from "./init.js";
 
@@ -67,7 +67,7 @@ if (command === "open") {
     // Sidecar not running — launch it
     if (isInsideTmux()) {
       console.log("Latch: starting...");
-      splitAndLaunchSidecar(cwd);
+      saveSidecarPaneId(cwd, splitAndLaunchSidecar(cwd));
     } else {
       console.error("Latch: not in tmux. Run 'latch' first to start.");
       process.exit(1);
@@ -95,6 +95,7 @@ const cwd = process.cwd();
 if (isInsideTmux()) {
   console.log("Latch: opening pane...");
   const paneId = splitAndLaunchSidecar(cwd);
+  saveSidecarPaneId(cwd, paneId);
   console.log(`Latch: running in pane ${paneId}`);
 } else {
   console.log("Latch: not inside tmux, creating new session...");

@@ -1,17 +1,16 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
+import type { TurnFile } from "../ipc.js";
 
 export interface TurnData {
   id: string;
   label: string;
-  files: string[];
+  files: TurnFile[];
   diffStats: { added: number; removed: number };
   timestamp: Date;
 }
 
-const CARD_INNER = 26;
-const CARD_OUTER = CARD_INNER + 2; // +2 for borders
-const MAX_FILES = 3;
+const MIN_CARD_OUTER = 28;
 
 function truncate(str: string, max: number): string {
   return str.length <= max ? str : str.slice(0, max - 1) + "…";
@@ -20,59 +19,36 @@ function truncate(str: string, max: number): string {
 function TurnCard({
   turn,
   isSelected,
+  cardOuter,
 }: {
   turn: TurnData;
   isSelected: boolean;
+  cardOuter: number;
 }) {
+  const cardInner = cardOuter - 4; // borders + paddingX
   const borderColor = isSelected ? "blue" : "gray";
   const indicator = isSelected ? "●" : "○";
-  const shown = turn.files.slice(0, MAX_FILES);
-  const extra = turn.files.length - shown.length;
-
-  // Pad to MAX_FILES rows so every card is the same height
-  const padRows = MAX_FILES - shown.length;
+  const fileNames = turn.files.map((f) => f.path.split("/").pop() ?? f.path).join("  ");
 
   return (
     <Box
       flexDirection="column"
       borderStyle="single"
       borderColor={borderColor}
-      width={CARD_OUTER}
+      width={cardOuter}
       paddingX={1}
     >
       {/* Label */}
       <Text bold={isSelected} color={isSelected ? "blue" : "white"} wrap="truncate">
-        {indicator} {truncate(turn.label, CARD_INNER - 2)}
+        {indicator} {truncate(turn.label, cardInner - 2)}
       </Text>
 
-      {/* Stats */}
-      <Text dimColor>
-        {turn.files.length} file{turn.files.length !== 1 ? "s" : ""}{"  "}
+      {/* Stats + files on one line */}
+      <Text dimColor wrap="truncate">
         <Text color="green">+{turn.diffStats.added}</Text>
-        {" / "}
-        <Text color="red">-{turn.diffStats.removed}</Text>
+        <Text color="red"> -{turn.diffStats.removed}</Text>
+        {"  "}{truncate(fileNames, cardInner - 10)}
       </Text>
-
-      {/* Spacer */}
-      <Text> </Text>
-
-      {/* File list */}
-      {shown.map((f) => (
-        <Text key={f} dimColor wrap="truncate">
-          {">"} {truncate(f, CARD_INNER - 4)}{"  ✓"}
-        </Text>
-      ))}
-
-      {/* Padding rows */}
-      {Array.from({ length: padRows }).map((_, i) => (
-        <Text key={i}> </Text>
-      ))}
-
-      {/* Overflow */}
-      <Text dimColor>{extra > 0 ? `+${extra} more` : " "}</Text>
-
-      {/* Action */}
-      <Text dimColor>{isSelected ? "[Enter] review" : " "}</Text>
     </Box>
   );
 }
@@ -80,12 +56,20 @@ function TurnCard({
 export default function TurnTray({ turns }: { turns: TurnData[] }) {
   const { exit } = useApp();
   const { stdout } = useStdout();
-  const termWidth = stdout?.columns ?? 80;
 
-  const [selectedIndex, setSelectedIndex] = React.useState(0);
+  const [termWidth, setTermWidth] = useState(stdout?.columns ?? 80);
+
+  useEffect(() => {
+    if (!stdout) return;
+    const onResize = () => setTermWidth(stdout.columns ?? 80);
+    stdout.on("resize", onResize);
+    return () => { stdout.off("resize", onResize); };
+  }, [stdout]);
+
+  const [selectedIndex, setSelectedIndex] = useState(0);
 
   // Auto-select latest turn when a new one arrives
-  React.useEffect(() => {
+  useEffect(() => {
     if (turns.length > 0) setSelectedIndex(turns.length - 1);
   }, [turns.length]);
 
@@ -95,8 +79,9 @@ export default function TurnTray({ turns }: { turns: TurnData[] }) {
     if (key.rightArrow) setSelectedIndex((i) => Math.min(turns.length - 1, i + 1));
   });
 
-  // How many cards fit across the terminal
-  const visibleCount = Math.max(1, Math.floor(termWidth / CARD_OUTER));
+  // Distribute full width evenly across visible cards
+  const visibleCount = Math.max(1, Math.floor(termWidth / MIN_CARD_OUTER));
+  const cardOuter = Math.floor(termWidth / visibleCount);
   const scrollStart = Math.max(0, Math.min(selectedIndex, turns.length - visibleCount));
   const visible = turns.slice(scrollStart, scrollStart + visibleCount);
 
@@ -120,6 +105,7 @@ export default function TurnTray({ turns }: { turns: TurnData[] }) {
               key={turn.id}
               turn={turn}
               isSelected={scrollStart + i === selectedIndex}
+              cardOuter={cardOuter}
             />
           ))
         )}

@@ -27,10 +27,16 @@ export type IpcMessage = {
   filePath: string;
 };
 
+export type TurnFile = {
+  path: string;
+  backupFile: string | null; // full path to ~/.claude/file-history backup; null = file was created (revert = delete)
+  isNew: boolean;
+};
+
 export type TrayMessage = {
   type: "turn";
   label: string;
-  files: string[];
+  files: TurnFile[];
   diffStats: { added: number; removed: number };
 };
 

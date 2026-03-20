@@ -1,7 +1,26 @@
 import { execSync, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+
+function sidecarPanePath(cwd: string): string {
+  const hash = createHash("sha256").update(cwd).digest("hex").slice(0, 12);
+  const dir = join(tmpdir(), "latch");
+  mkdirSync(dir, { recursive: true });
+  return join(dir, `${hash}-sidecar-pane.txt`);
+}
+
+export function saveSidecarPaneId(cwd: string, paneId: string): void {
+  writeFileSync(sidecarPanePath(cwd), paneId);
+}
+
+export function getSidecarPaneId(cwd: string): string | null {
+  const p = sidecarPanePath(cwd);
+  if (!existsSync(p)) return null;
+  return readFileSync(p, "utf-8").trim() || null;
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
