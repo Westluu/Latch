@@ -1,7 +1,26 @@
 import { execSync, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
+import { tmpdir } from "node:os";
+
+function sidecarPanePath(cwd: string): string {
+  const hash = createHash("sha256").update(cwd).digest("hex").slice(0, 12);
+  const dir = join(tmpdir(), "latch");
+  mkdirSync(dir, { recursive: true });
+  return join(dir, `${hash}-sidecar-pane.txt`);
+}
+
+export function saveSidecarPaneId(cwd: string, paneId: string): void {
+  writeFileSync(sidecarPanePath(cwd), paneId);
+}
+
+export function getSidecarPaneId(cwd: string): string | null {
+  const p = sidecarPanePath(cwd);
+  if (!existsSync(p)) return null;
+  return readFileSync(p, "utf-8").trim() || null;
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -15,6 +34,26 @@ function run(cmd: string): string {
 
 export function getSessionName(): string {
   return run("tmux display-message -p '#S'");
+}
+
+function trayCommand(cwd: string): string {
+  const distTray = join(__dirname, "tray.js");
+  if (existsSync(distTray)) return `node "${distTray}" "${cwd}"`;
+  const rootDistTray = join(__dirname, "..", "dist", "tray.js");
+  if (existsSync(rootDistTray)) return `node "${rootDistTray}" "${cwd}"`;
+  const tsxBin = join(__dirname, "..", "node_modules", ".bin", "tsx");
+  const traySrc = join(__dirname, "tray.tsx");
+  return `"${tsxBin}" "${traySrc}" "${cwd}"`;
+}
+
+export function splitAndLaunchTray(cwd: string): string {
+  // Split vertically (top/bottom), tray takes 10 lines at the bottom
+  const paneId = run(
+    `tmux split-window -v -l 10 -P -F '#{pane_id}' -c '${cwd}' '${trayCommand(cwd)}'`
+  );
+  // Move focus back to the pane above
+  run("tmux select-pane -U");
+  return paneId;
 }
 
 function sidecarCommand(cwd: string): string {

@@ -21,8 +21,21 @@ export default function App({ cwd, onFileOpen }: AppProps) {
   const [scrollOffset, setScrollOffset] = useState(0);
   const [mode, setMode] = useState<"preview" | "diff">("preview");
 
-  const termHeight = stdout?.rows ?? 24;
-  const termWidth = stdout?.columns ?? 80;
+  const [termSize, setTermSize] = useState({
+    height: stdout?.rows ?? 24,
+    width: stdout?.columns ?? 80,
+  });
+
+  useEffect(() => {
+    if (!stdout) return;
+    const onResize = () =>
+      setTermSize({ height: stdout.rows ?? 24, width: stdout.columns ?? 80 });
+    stdout.on("resize", onResize);
+    return () => { stdout.off("resize", onResize); };
+  }, [stdout]);
+
+  const termHeight = termSize.height;
+  const termWidth = termSize.width;
   const previewMaxLines = termHeight - 6;
   const fileListWidth = Math.floor(termWidth * 0.4);
 
