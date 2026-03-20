@@ -20,6 +20,11 @@ function getPendingFilePath(cwd: string): string {
   return join(dir, `${hash}-pending.txt`);
 }
 
+function getSidecarPanePath(cwd: string): string {
+  const hash = createHash("sha256").update(cwd).digest("hex").slice(0, 12);
+  return join(tmpdir(), "latch", `${hash}-sidecar-pane.txt`);
+}
+
 function trayCommand(cwd: string): string {
   const distTray = resolve(__dirname, "tray.js");
   if (existsSync(distTray)) return `node "${distTray}" "${cwd}"`;
@@ -94,8 +99,14 @@ process.stdin.on("end", async () => {
 
     // Launch tray pane if not running (requires tmux)
     if (!trayRunning && process.env.TMUX) {
+      const sidecarPanePath = getSidecarPanePath(cwd);
+      const sidecarPane = existsSync(sidecarPanePath)
+        ? readFileSync(sidecarPanePath, "utf-8").trim()
+        : null;
+      // If sidecar is open, split above it (-b) so tray sits at the top of the sidecar column
+      const splitTarget = sidecarPane ? `-b -t ${sidecarPane}` : "";
       execSync(
-        `tmux split-window -v -l 10 -c ${JSON.stringify(cwd)} '${trayCommand(cwd)}'`
+        `tmux split-window -v -l 10 ${splitTarget} -c ${JSON.stringify(cwd)} '${trayCommand(cwd)}'`
       );
       // Wait for the IPC socket to appear (up to 4s)
       for (let i = 0; i < 8; i++) {
