@@ -17,8 +17,8 @@ export function getSocketPath(cwd: string): string {
   return join(getSocketDir(), `${hash}.sock`);
 }
 
-export function getTraySocketPath(cwd: string): string {
-  const hash = createHash("sha256").update(cwd).digest("hex").slice(0, 12);
+export function getTraySocketPath(cwd: string, sessionId: string): string {
+  const hash = createHash("sha256").update(cwd + sessionId).digest("hex").slice(0, 12);
   return join(getSocketDir(), `${hash}-tray.sock`);
 }
 
@@ -125,10 +125,10 @@ export function sendIpcMessage(cwd: string, msg: IpcMessage): Promise<string> {
 
 // ── tray IPC ─────────────────────────────────────────────────────────────────
 
-export function startTrayIpcServer(cwd: string, onMessage: (msg: TrayMessage) => void): Server {
-  return startServerOnSocket(getTraySocketPath(cwd), onMessage);
+export function startTrayIpcServer(cwd: string, sessionId: string, onMessage: (msg: TrayMessage) => void): Server {
+  return startServerOnSocket(getTraySocketPath(cwd, sessionId), onMessage);
 }
 
-export function sendTrayMessage(cwd: string, msg: TrayMessage): Promise<string> {
-  return sendToSocket(getTraySocketPath(cwd), msg);
+export function sendTrayMessage(cwd: string, sessionId: string, msg: TrayMessage): Promise<string> {
+  return sendToSocket(getTraySocketPath(cwd, sessionId), msg);
 }

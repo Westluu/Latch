@@ -2,7 +2,7 @@
 // Claude Code PostToolUse hook for Latch
 // Receives tool use data via stdin, sends file path to sidecar via IPC
 
-import { appendFileSync, mkdirSync, existsSync, writeFileSync } from "node:fs";
+import { mkdirSync, existsSync, writeFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -27,12 +27,6 @@ function sidecarCommand(cwd: string): string {
   return `"${tsxBin}" "${sidecarSrc}" "${cwd}"`;
 }
 
-function getPendingFilePath(cwd: string): string {
-  const hash = createHash("sha256").update(cwd).digest("hex").slice(0, 12);
-  const dir = join(tmpdir(), "latch");
-  mkdirSync(dir, { recursive: true });
-  return join(dir, `${hash}-pending.txt`);
-}
 
 function getSidecarPanePath(cwd: string): string {
   const hash = createHash("sha256").update(cwd).digest("hex").slice(0, 12);
@@ -58,9 +52,6 @@ process.stdin.on("end", async () => {
     const relative = filePath.startsWith(cwd + "/")
       ? filePath.slice(cwd.length + 1)
       : filePath;
-
-    // Track file for the current pending turn
-    appendFileSync(getPendingFilePath(cwd), relative + "\n");
 
     // Auto-launch sidecar if it's not running and this is a .md or plan file
     if (isMdOrPlan(relative) && process.env.TMUX) {
