@@ -1,5 +1,5 @@
 import { execSync, spawn } from "node:child_process";
-import { existsSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
+import { existsSync, writeFileSync, readFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
@@ -70,4 +70,43 @@ export function launchNewSession(cwd: string): void {
     stdio: "inherit",
   });
   attach.on("exit", () => process.exit(0));
+}
+
+// ── tray pane tracking ──────────────────────────────────────────────────────
+
+function trayPanePath(cwd: string): string {
+  const hash = createHash("sha256").update(cwd).digest("hex").slice(0, 12);
+  const dir = join(tmpdir(), "latch");
+  mkdirSync(dir, { recursive: true });
+  return join(dir, `${hash}-tray-pane.txt`);
+}
+
+export function saveTrayPaneId(cwd: string, paneId: string): void {
+  writeFileSync(trayPanePath(cwd), paneId);
+}
+
+export function getTrayPaneId(cwd: string): string | null {
+  const p = trayPanePath(cwd);
+  if (!existsSync(p)) return null;
+  return readFileSync(p, "utf-8").trim() || null;
+}
+
+// ── session cleanup ─────────────────────────────────────────────────────────
+
+/** Kill sidecar and tray panes for a given cwd, clean up pane ID files */
+export function killLatchPanes(cwd: string): void {
+  const sidecarPane = getSidecarPaneId(cwd);
+  const trayPane = getTrayPaneId(cwd);
+
+  for (const paneId of [sidecarPane, trayPane]) {
+    if (!paneId) continue;
+    try {
+      execSync(`tmux kill-pane -t ${paneId} 2>/dev/null`);
+    } catch {}
+  }
+
+  // Clean up pane ID files
+  for (const path of [sidecarPanePath(cwd), trayPanePath(cwd)]) {
+    try { unlinkSync(path); } catch {}
+  }
 }
