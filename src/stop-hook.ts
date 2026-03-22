@@ -3,7 +3,8 @@
 // Fires when Claude's turn ends. Reads the session JSONL to diff consecutive
 // turn-boundary snapshots, then sends the turn to the tray via IPC.
 
-import { readFileSync, existsSync, appendFileSync } from "node:fs";
+import { readFileSync, existsSync, appendFileSync, unlinkSync } from "node:fs";
+import { connect } from "node:net";
 import { execSync } from "node:child_process";
 import { join, resolve, dirname, relative } from "node:path";
 import { homedir } from "node:os";
@@ -39,14 +40,18 @@ const dbg = (...args: unknown[]) => {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+function isSocketAlive(socketPath: string): Promise<boolean> {
+  return new Promise((res) => {
+    const socket = connect(socketPath);
+    const timer = setTimeout(() => { socket.destroy(); res(false); }, 1000);
+    socket.on("connect", () => { clearTimeout(timer); socket.destroy(); res(true); });
+    socket.on("error", () => { clearTimeout(timer); res(false); });
+  });
+}
+
 function trayCommand(cwd: string, sessionId: string): string {
-  const distTray = resolve(__dirname, "tray.js");
-  if (existsSync(distTray)) return `node "${distTray}" "${cwd}" "${sessionId}"`;
-  const rootDistTray = resolve(__dirname, "..", "dist", "tray.js");
-  if (existsSync(rootDistTray)) return `node "${rootDistTray}" "${cwd}" "${sessionId}"`;
-  const tsxBin = resolve(__dirname, "..", "node_modules", ".bin", "tsx");
-  const traySrc = resolve(__dirname, "tray.tsx");
-  return `"${tsxBin}" "${traySrc}" "${cwd}" "${sessionId}"`;
+  const trayPy = resolve(__dirname, "..", "python", "tray.py");
+  return `python3 "${trayPy}" "${cwd}" "${sessionId}"`;
 }
 
 // Parse the session JSONL and return only file-history-snapshot entries
@@ -270,10 +275,17 @@ process.stdin.on("end", async () => {
     dbg("label=" + label + " stats=+" + diffStats.added + "/-" + diffStats.removed);
 
     const traySocket = getTraySocketPath(cwd, sessionId);
-    const trayRunning = existsSync(traySocket);
-    dbg("trayRunning=" + trayRunning + " TMUX=" + !!process.env.TMUX);
+    let trayAlive = false;
+    if (existsSync(traySocket)) {
+      trayAlive = await isSocketAlive(traySocket);
+      dbg("traySocket exists, alive=" + trayAlive);
+      if (!trayAlive) {
+        try { unlinkSync(traySocket); } catch {}
+      }
+    }
+    dbg("trayAlive=" + trayAlive + " TMUX=" + !!process.env.TMUX);
 
-    if (!trayRunning && process.env.TMUX) {
+    if (!trayAlive && process.env.TMUX) {
       // Verify sidecar pane still exists before targeting it (it may have been closed)
       const savedPane = getSidecarPaneId(cwd);
       let sidecarPane: string | null = null;

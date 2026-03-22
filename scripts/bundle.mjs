@@ -1,7 +1,7 @@
 import { build } from "esbuild";
 
 await build({
-  entryPoints: ["src/cli.ts", "src/sidecar.tsx", "src/hook.ts", "src/stop-hook.ts", "src/tray.tsx"],
+  entryPoints: ["src/cli.ts", "src/hook.ts", "src/stop-hook.ts"],
   bundle: true,
   platform: "node",
   format: "esm",

@@ -2,37 +2,26 @@
 // Claude Code PostToolUse hook for Latch
 // Receives tool use data via stdin, sends file path to sidecar via IPC
 
-import { mkdirSync, existsSync, writeFileSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
-import { tmpdir } from "node:os";
-import { createHash } from "node:crypto";
-import { execSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { existsSync, unlinkSync } from "node:fs";
+import { connect } from "node:net";
 import { sendIpcMessage, getSocketPath } from "./ipc.js";
+import { splitAndLaunchSidecar, saveSidecarPaneId } from "./tmux.js";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function isMdOrPlan(filePath: string): boolean {
-  return filePath.endsWith(".md") || /plan/i.test(filePath);
-}
+import { appendFileSync } from "node:fs";
+const LOG = "/tmp/latch-hook.log";
+const dbg = (...args: unknown[]) => {
+  try { appendFileSync(LOG, `[${new Date().toISOString()}] ${args.join(" ")}\n`); } catch {}
+};
 
-function sidecarCommand(cwd: string): string {
-  const distSidecar = resolve(__dirname, "sidecar.js");
-  if (existsSync(distSidecar)) return `node "${distSidecar}" "${cwd}"`;
-  const rootDistSidecar = resolve(__dirname, "..", "dist", "sidecar.js");
-  if (existsSync(rootDistSidecar)) return `node "${rootDistSidecar}" "${cwd}"`;
-  const tsxBin = resolve(__dirname, "..", "node_modules", ".bin", "tsx");
-  const sidecarSrc = resolve(__dirname, "sidecar.tsx");
-  return `"${tsxBin}" "${sidecarSrc}" "${cwd}"`;
-}
-
-
-function getSidecarPanePath(cwd: string): string {
-  const hash = createHash("sha256").update(cwd).digest("hex").slice(0, 12);
-  const dir = join(tmpdir(), "latch");
-  mkdirSync(dir, { recursive: true });
-  return join(dir, `${hash}-sidecar-pane.txt`);
+function isSocketAlive(socketPath: string): Promise<boolean> {
+  return new Promise((res) => {
+    const socket = connect(socketPath);
+    const timer = setTimeout(() => { socket.destroy(); res(false); }, 1000);
+    socket.on("connect", () => { clearTimeout(timer); socket.destroy(); res(true); });
+    socket.on("error", () => { clearTimeout(timer); res(false); });
+  });
 }
 
 let input = "";
@@ -45,42 +34,50 @@ process.stdin.on("end", async () => {
   try {
     const data = JSON.parse(input);
     const filePath = data.tool_input?.file_path;
+    dbg("filePath:", filePath);
     if (!filePath) process.exit(0);
 
-    // Convert absolute path to relative path based on cwd
     const cwd = data.cwd || process.cwd();
     const relative = filePath.startsWith(cwd + "/")
       ? filePath.slice(cwd.length + 1)
       : filePath;
 
-    // Auto-launch sidecar if it's not running and this is a .md or plan file
-    if (isMdOrPlan(relative) && process.env.TMUX) {
+    dbg("cwd:", cwd, "relative:", relative, "TMUX:", process.env.TMUX);
+
+    if (process.env.TMUX) {
       const sidecarSocket = getSocketPath(cwd);
-      if (!existsSync(sidecarSocket)) {
-        // Save current pane ID before splitting
-        const currentPane = execSync("tmux display-message -p '#{pane_id}'", {
-          encoding: "utf-8",
-        }).trim();
-        execSync(
-          `tmux split-window -h -f -c ${JSON.stringify(cwd)} '${sidecarCommand(cwd)}'`
-        );
-        // Capture sidecar pane ID so stop-hook can split above it for the tray
-        const sidecarPane = execSync("tmux display-message -p '#{pane_id}'", {
-          encoding: "utf-8",
-        }).trim();
-        writeFileSync(getSidecarPanePath(cwd), sidecarPane);
-        // Switch focus back to original pane so other splits go to Claude
-        execSync(`tmux select-pane -t ${currentPane}`);
+      let alive = false;
+      if (existsSync(sidecarSocket)) {
+        alive = await isSocketAlive(sidecarSocket);
+        dbg("socket:", sidecarSocket, "exists: true, alive:", alive);
+        if (!alive) {
+          dbg("removing stale socket");
+          try { unlinkSync(sidecarSocket); } catch {}
+        }
+      } else {
+        dbg("socket:", sidecarSocket, "exists: false");
+      }
+      if (!alive) {
+        dbg("launching sidecar via splitAndLaunchSidecar");
+        try {
+          const paneId = splitAndLaunchSidecar(cwd);
+          saveSidecarPaneId(cwd, paneId);
+          dbg("sidecar pane:", paneId);
+        } catch (e) {
+          dbg("sidecar launch failed:", e);
+        }
         for (let i = 0; i < 8; i++) {
           await sleep(500);
-          if (existsSync(sidecarSocket)) break;
+          if (existsSync(sidecarSocket)) { dbg("socket ready after", i + 1, "attempts"); break; }
         }
+        dbg("socket exists after wait:", existsSync(sidecarSocket));
       }
     }
 
     await sendIpcMessage(cwd, { type: "open", filePath: relative });
-  } catch {
-    // Silently fail — don't break Claude Code
+    dbg("message sent");
+  } catch (err) {
+    dbg("ERROR:", err);
   }
   process.exit(0);
 });
