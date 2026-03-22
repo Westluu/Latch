@@ -20,6 +20,11 @@ function getSessionEndHookCommand(): string {
   return `node "${hookScript}"`;
 }
 
+function getSessionStartHookCommand(): string {
+  const hookScript = resolve(import.meta.dirname, "session-start-hook.js");
+  return `node "${hookScript}"`;
+}
+
 function readSettings(): any {
   if (!existsSync(SETTINGS_PATH)) {
     return {};
@@ -60,6 +65,14 @@ function hasLatchSessionEndHook(settings: any): boolean {
   );
 }
 
+function hasLatchSessionStartHook(settings: any): boolean {
+  const sessionStart = settings.hooks?.SessionStart;
+  if (!Array.isArray(sessionStart)) return false;
+  return sessionStart.some(
+    (entry: any) => entry.hooks?.some((h: any) => h.command?.includes("session-start-hook"))
+  );
+}
+
 export function initHook(): void {
   const settings = readSettings();
 
@@ -89,6 +102,13 @@ export function initHook(): void {
     if (!Array.isArray(settings.hooks.SessionEnd)) settings.hooks.SessionEnd = [];
     settings.hooks.SessionEnd.push({
       hooks: [{ type: "command", command: getSessionEndHookCommand(), timeout: 10 }],
+    });
+  }
+
+  if (!hasLatchSessionStartHook(settings)) {
+    if (!Array.isArray(settings.hooks.SessionStart)) settings.hooks.SessionStart = [];
+    settings.hooks.SessionStart.push({
+      hooks: [{ type: "command", command: getSessionStartHookCommand(), timeout: 10 }],
     });
   }
 
@@ -124,6 +144,14 @@ export function removeHook(): void {
       (entry: any) => !entry.hooks?.some((h: any) => h.command?.includes("session-end-hook"))
     );
     if (settings.hooks.SessionEnd.length === 0) delete settings.hooks.SessionEnd;
+    removed = true;
+  }
+
+  if (hasLatchSessionStartHook(settings)) {
+    settings.hooks.SessionStart = settings.hooks.SessionStart.filter(
+      (entry: any) => !entry.hooks?.some((h: any) => h.command?.includes("session-start-hook"))
+    );
+    if (settings.hooks.SessionStart.length === 0) delete settings.hooks.SessionStart;
     removed = true;
   }
 
