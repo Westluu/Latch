@@ -10,7 +10,7 @@ import { join, resolve, dirname, relative } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { getTraySocketPath, sendTrayMessage, type TurnFile } from "./ipc.js";
-import { getSidecarPaneId } from "./tmux.js";
+import { getSidecarPaneId, saveTrayPaneId } from "./tmux.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -298,10 +298,12 @@ process.stdin.on("end", async () => {
         }
       }
       const targetFlag = sidecarPane ? `-b -t ${sidecarPane}` : "";
-      const cmd = `tmux split-window -v -l 10 ${targetFlag} -c ${JSON.stringify(cwd)} '${trayCommand(cwd, sessionId)}'`;
+      const cmd = `tmux split-window -v -l 10 -P -F '#{pane_id}' ${targetFlag} -c ${JSON.stringify(cwd)} '${trayCommand(cwd, sessionId)}'`;
       dbg("launching tray:", cmd);
       try {
-        execSync(cmd);
+        const trayPaneId = execSync(cmd, { encoding: "utf-8" }).trim();
+        dbg("tray pane:", trayPaneId);
+        saveTrayPaneId(cwd, trayPaneId);
       } catch (e) {
         dbg("tmux launch failed:", e);
       }

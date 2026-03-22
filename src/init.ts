@@ -15,6 +15,11 @@ function getStopHookCommand(): string {
   return `node "${hookScript}"`;
 }
 
+function getSessionEndHookCommand(): string {
+  const hookScript = resolve(import.meta.dirname, "session-end-hook.js");
+  return `node "${hookScript}"`;
+}
+
 function readSettings(): any {
   if (!existsSync(SETTINGS_PATH)) {
     return {};
@@ -47,6 +52,14 @@ function hasLatchStopHook(settings: any): boolean {
   );
 }
 
+function hasLatchSessionEndHook(settings: any): boolean {
+  const sessionEnd = settings.hooks?.SessionEnd;
+  if (!Array.isArray(sessionEnd)) return false;
+  return sessionEnd.some(
+    (entry: any) => entry.hooks?.some((h: any) => h.command?.includes("session-end-hook"))
+  );
+}
+
 export function initHook(): void {
   const settings = readSettings();
 
@@ -69,6 +82,13 @@ export function initHook(): void {
     if (!Array.isArray(settings.hooks.Stop)) settings.hooks.Stop = [];
     settings.hooks.Stop.push({
       hooks: [{ type: "command", command: getStopHookCommand(), timeout: 30 }],
+    });
+  }
+
+  if (!hasLatchSessionEndHook(settings)) {
+    if (!Array.isArray(settings.hooks.SessionEnd)) settings.hooks.SessionEnd = [];
+    settings.hooks.SessionEnd.push({
+      hooks: [{ type: "command", command: getSessionEndHookCommand(), timeout: 10 }],
     });
   }
 
@@ -96,6 +116,14 @@ export function removeHook(): void {
       (entry: any) => !entry.hooks?.some((h: any) => h.command?.includes("stop-hook"))
     );
     if (settings.hooks.Stop.length === 0) delete settings.hooks.Stop;
+    removed = true;
+  }
+
+  if (hasLatchSessionEndHook(settings)) {
+    settings.hooks.SessionEnd = settings.hooks.SessionEnd.filter(
+      (entry: any) => !entry.hooks?.some((h: any) => h.command?.includes("session-end-hook"))
+    );
+    if (settings.hooks.SessionEnd.length === 0) delete settings.hooks.SessionEnd;
     removed = true;
   }
 
