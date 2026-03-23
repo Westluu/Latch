@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSession, saveSidecarPaneId } from "./tmux.js";
+import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSession, launchWithAgent, saveSidecarPaneId } from "./tmux.js";
 import { sendIpcMessage } from "./ipc.js";
 import { initHook, removeHook } from "./init.js";
 
@@ -9,13 +9,13 @@ const command = args[0];
 
 if (args.includes("--help") || args.includes("-h")) {
   console.log(`
-latch — terminal viewer for agent workflows
+latch — terminal sidecar for agent-driven CLI workflows
 
 Usage:
-  latch              Open Latch in a tmux pane
+  latch claude       Launch Claude Code in a tmux session with Latch
   latch open <file>  Open a file in the Latch preview
-  latch init         Add Claude Code hook (auto-open files on edit)
-  latch remove       Remove the Claude Code hook
+  latch init         Add Claude Code hooks (auto-open files on edit)
+  latch remove       Remove the Claude Code hooks
   latch --help       Show this help message
   latch --version    Show version
 `);
@@ -25,6 +25,16 @@ Usage:
 if (args.includes("--version") || args.includes("-v")) {
   console.log("latch v0.1.0");
   process.exit(0);
+}
+
+const AGENTS: Record<string, string> = {
+  claude: "claude",
+};
+
+if (command && command in AGENTS) {
+  const cwd = process.cwd();
+  launchWithAgent(cwd, AGENTS[command]);
+  // launchWithAgent handles process exit internally
 }
 
 if (command === "init") {
