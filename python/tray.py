@@ -36,9 +36,9 @@ def get_socket_dir() -> str:
     return d
 
 
-def get_sidecar_socket_path(cwd: str) -> str:
-    h = hashlib.sha256(cwd.encode()).hexdigest()[:12]
-    return os.path.join(get_socket_dir(), f"{h}.sock")
+def get_sidecar_socket_path(cwd: str, session_id: str = "") -> str:
+    h = hashlib.sha256((cwd + session_id).encode()).hexdigest()[:12]
+    return os.path.join(get_socket_dir(), f"{h}-sidecar.sock")
 
 
 def get_tray_socket_path(cwd: str, session_id: str) -> str:
@@ -46,9 +46,9 @@ def get_tray_socket_path(cwd: str, session_id: str) -> str:
     return os.path.join(get_socket_dir(), f"{h}-tray.sock")
 
 
-async def send_to_sidecar(cwd: str, msg: dict) -> None:
+async def send_to_sidecar(cwd: str, session_id: str, msg: dict) -> None:
     """Send a message to the sidecar's IPC socket."""
-    sock_path = get_sidecar_socket_path(cwd)
+    sock_path = get_sidecar_socket_path(cwd, session_id)
     if not os.path.exists(sock_path):
         return
     try:
@@ -361,7 +361,7 @@ class TrayApp(App):
         self._turns = revert_from(self._turns, idx)
         self._rebuild_cards()
         self.notify(f"Reverted {len(self._turns) - idx} turn(s)")
-        await send_to_sidecar(self.cwd, {"type": "refresh"})
+        await send_to_sidecar(self.cwd, self.session_id, {"type": "refresh"})
 
     def action_review(self) -> None:
         if not self._turns:

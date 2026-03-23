@@ -2,7 +2,7 @@
 Latch sidecar TUI — file list + diff viewer.
 
 Usage:
-    python3 sidecar.py <cwd>
+    python3 sidecar.py <cwd> [session_id]
 """
 
 from __future__ import annotations
@@ -35,9 +35,9 @@ def get_socket_dir() -> str:
     return d
 
 
-def get_socket_path(cwd: str) -> str:
-    h = hashlib.sha256(cwd.encode()).hexdigest()[:12]
-    return os.path.join(get_socket_dir(), f"{h}.sock")
+def get_socket_path(cwd: str, session_id: str = "") -> str:
+    h = hashlib.sha256((cwd + session_id).encode()).hexdigest()[:12]
+    return os.path.join(get_socket_dir(), f"{h}-sidecar.sock")
 
 
 async def start_ipc_server(socket_path: str, on_message):
@@ -223,13 +223,14 @@ class SidecarApp(App):
         Binding("tab", "focus_next", "Switch pane"),
     ]
 
-    def __init__(self, cwd: str) -> None:
+    def __init__(self, cwd: str, session_id: str = "") -> None:
         super().__init__()
         self.cwd = cwd
+        self.session_id = session_id
         self._files: list[dict] = []
         self._selected_path: Optional[str] = None
         self._ipc_server = None
-        self._socket_path = get_socket_path(cwd)
+        self._socket_path = get_socket_path(cwd, session_id)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -310,15 +311,16 @@ class SidecarApp(App):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python3 sidecar.py <cwd>", file=sys.stderr)
+        print("Usage: python3 sidecar.py <cwd> [session_id]", file=sys.stderr)
         sys.exit(1)
 
     cwd = os.path.abspath(sys.argv[1])
+    session_id = sys.argv[2] if len(sys.argv) > 2 else ""
     if not os.path.isdir(cwd):
         print(f"Error: {cwd!r} is not a directory", file=sys.stderr)
         sys.exit(1)
 
-    socket_path = get_socket_path(cwd)
+    socket_path = get_socket_path(cwd, session_id)
 
     def cleanup_socket():
         try:
@@ -331,5 +333,5 @@ if __name__ == "__main__":
     signal.signal(signal.SIGHUP, lambda *_: (cleanup_socket(), sys.exit(0)))
     signal.signal(signal.SIGTERM, lambda *_: (cleanup_socket(), sys.exit(0)))
 
-    app = SidecarApp(cwd)
+    app = SidecarApp(cwd, session_id)
     app.run()

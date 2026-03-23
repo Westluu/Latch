@@ -9,7 +9,7 @@ import { execSync } from "node:child_process";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getTraySocketPath, sendTrayMessage } from "./ipc.js";
-import { getSidecarPaneId, saveTrayPaneId } from "./tmux.js";
+import { getSidecarPaneId, saveTrayPaneId, isPaneInCurrentSession } from "./tmux.js";
 import { sessionIdFromTranscript, parseLastTurn } from "./transcript.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -79,24 +79,16 @@ process.stdin.on("end", async () => {
     dbg("trayAlive=" + trayAlive + " TMUX=" + !!process.env.TMUX);
 
     if (!trayAlive && process.env.TMUX) {
-      // Verify sidecar pane still exists before targeting it (it may have been closed)
-      const savedPane = getSidecarPaneId(cwd);
-      let sidecarPane: string | null = null;
-      if (savedPane) {
-        try {
-          execSync(`tmux list-panes -a -F '#{pane_id}' | grep -qF '${savedPane}'`);
-          sidecarPane = savedPane;
-        } catch {
-          sidecarPane = null; // pane no longer exists
-        }
-      }
+      // Verify sidecar pane exists in the current tmux session before targeting it
+      const savedPane = getSidecarPaneId(cwd, sessionId);
+      const sidecarPane = savedPane && isPaneInCurrentSession(savedPane) ? savedPane : null;
       const targetFlag = sidecarPane ? `-b -t ${sidecarPane}` : "";
       const cmd = `tmux split-window -v -l 10 -P -F '#{pane_id}' ${targetFlag} -c ${JSON.stringify(cwd)} '${trayCommand(cwd, sessionId)}'`;
       dbg("launching tray:", cmd);
       try {
         const trayPaneId = execSync(cmd, { encoding: "utf-8" }).trim();
         dbg("tray pane:", trayPaneId);
-        saveTrayPaneId(cwd, trayPaneId);
+        saveTrayPaneId(cwd, sessionId, trayPaneId);
       } catch (e) {
         dbg("tmux launch failed:", e);
       }

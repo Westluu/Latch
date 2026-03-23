@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSession, launchWithAgent, saveSidecarPaneId } from "./tmux.js";
-import { sendIpcMessage } from "./ipc.js";
+import { sendSidecarMessage } from "./ipc.js";
 import { initHook, removeHook } from "./init.js";
 
 const args = process.argv.slice(2);
@@ -70,14 +70,14 @@ if (command === "open") {
 
   // Try sending first; if sidecar isn't running, launch it and retry
   try {
-    const response = await sendIpcMessage(cwd, { type: "open", filePath });
+    const response = await sendSidecarMessage(cwd, "", { type: "open", filePath });
     console.log(response);
     process.exit(0);
   } catch {
     // Sidecar not running — launch it
     if (isInsideTmux()) {
       console.log("Latch: starting...");
-      saveSidecarPaneId(cwd, splitAndLaunchSidecar(cwd));
+      saveSidecarPaneId(cwd, "", splitAndLaunchSidecar(cwd));
     } else {
       console.error("Latch: not in tmux. Run 'latch' first to start.");
       process.exit(1);
@@ -88,7 +88,7 @@ if (command === "open") {
     for (let i = 0; i < 10; i++) {
       await sleep(500);
       try {
-        const response = await sendIpcMessage(cwd, { type: "open", filePath });
+        const response = await sendSidecarMessage(cwd, "", { type: "open", filePath });
         console.log(response);
         process.exit(0);
       } catch {
@@ -105,7 +105,7 @@ const cwd = process.cwd();
 if (isInsideTmux()) {
   console.log("Latch: opening pane...");
   const paneId = splitAndLaunchSidecar(cwd);
-  saveSidecarPaneId(cwd, paneId);
+  saveSidecarPaneId(cwd, "", paneId);
   console.log(`Latch: running in pane ${paneId}`);
 } else {
   console.log("Latch: not inside tmux, creating new session...");

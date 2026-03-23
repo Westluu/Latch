@@ -4,8 +4,9 @@
 
 import { existsSync, unlinkSync } from "node:fs";
 import { connect } from "node:net";
-import { sendIpcMessage, getSocketPath } from "./ipc.js";
+import { sendSidecarMessage, getSidecarSocketPath } from "./ipc.js";
 import { splitAndLaunchSidecar, saveSidecarPaneId } from "./tmux.js";
+import { sessionIdFromTranscript } from "./transcript.js";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -38,14 +39,16 @@ process.stdin.on("end", async () => {
     if (!filePath) process.exit(0);
 
     const cwd = data.cwd || process.cwd();
+    const transcriptPath = data.transcript_path as string | undefined;
+    const sessionId = transcriptPath ? sessionIdFromTranscript(transcriptPath) : "";
     const relative = filePath.startsWith(cwd + "/")
       ? filePath.slice(cwd.length + 1)
       : filePath;
 
-    dbg("cwd:", cwd, "relative:", relative, "TMUX:", process.env.TMUX);
+    dbg("cwd:", cwd, "relative:", relative, "sessionId:", sessionId, "TMUX:", process.env.TMUX);
 
     if (process.env.TMUX) {
-      const sidecarSocket = getSocketPath(cwd);
+      const sidecarSocket = getSidecarSocketPath(cwd, sessionId);
       let alive = false;
       if (existsSync(sidecarSocket)) {
         alive = await isSocketAlive(sidecarSocket);
@@ -60,8 +63,8 @@ process.stdin.on("end", async () => {
       if (!alive) {
         dbg("launching sidecar via splitAndLaunchSidecar");
         try {
-          const paneId = splitAndLaunchSidecar(cwd);
-          saveSidecarPaneId(cwd, paneId);
+          const paneId = splitAndLaunchSidecar(cwd, sessionId);
+          saveSidecarPaneId(cwd, sessionId, paneId);
           dbg("sidecar pane:", paneId);
         } catch (e) {
           dbg("sidecar launch failed:", e);
@@ -74,7 +77,7 @@ process.stdin.on("end", async () => {
       }
     }
 
-    await sendIpcMessage(cwd, { type: "open", filePath: relative });
+    await sendSidecarMessage(cwd, sessionId, { type: "open", filePath: relative });
     dbg("message sent");
   } catch (err) {
     dbg("ERROR:", err);
