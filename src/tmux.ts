@@ -1,4 +1,4 @@
-import { execSync, spawn } from "node:child_process";
+import { execSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, writeFileSync, readFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -70,6 +70,38 @@ export function launchNewSession(cwd: string): void {
     stdio: "inherit",
   });
   attach.on("exit", () => process.exit(0));
+}
+
+function sessionExists(name: string): boolean {
+  try {
+    run(`tmux has-session -t ${name}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function launchWithAgent(cwd: string, agentCommand: string): never {
+  const sessionName = "latch";
+
+  if (isInsideTmux()) {
+    // Already in tmux — run the agent in the current pane and block
+    const result = spawnSync(agentCommand, [], {
+      cwd,
+      stdio: "inherit",
+    });
+    process.exit(result.status ?? 0);
+  } else {
+    if (!sessionExists(sessionName)) {
+      const wrappedCommand = `echo "Latch — starting ${agentCommand}..." && ${agentCommand}`;
+      run(`tmux new-session -d -s ${sessionName} -c '${cwd}' '${wrappedCommand}'`);
+    }
+
+    const result = spawnSync("tmux", ["attach-session", "-t", sessionName], {
+      stdio: "inherit",
+    });
+    process.exit(result.status ?? 0);
+  }
 }
 
 // ── tray pane tracking ──────────────────────────────────────────────────────
