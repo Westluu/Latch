@@ -12,9 +12,9 @@ function getSocketDir(): string {
   return dir;
 }
 
-export function getSocketPath(cwd: string): string {
-  const hash = createHash("sha256").update(cwd).digest("hex").slice(0, 12);
-  return join(getSocketDir(), `${hash}.sock`);
+export function getSidecarSocketPath(cwd: string, sessionId: string = ""): string {
+  const hash = createHash("sha256").update(cwd + sessionId).digest("hex").slice(0, 12);
+  return join(getSocketDir(), `${hash}-sidecar.sock`);
 }
 
 export function getTraySocketPath(cwd: string, sessionId: string): string {
@@ -66,8 +66,8 @@ function sendToSocket<T>(socketPath: string, msg: T): Promise<string> {
   });
 }
 
-export function sendIpcMessage(cwd: string, msg: IpcMessage): Promise<string> {
-  return sendToSocket(getSocketPath(cwd), msg);
+export function sendSidecarMessage(cwd: string, sessionId: string, msg: IpcMessage): Promise<string> {
+  return sendToSocket(getSidecarSocketPath(cwd, sessionId), msg);
 }
 
 export function sendTrayMessage(cwd: string, sessionId: string, msg: TrayMessage): Promise<string> {
