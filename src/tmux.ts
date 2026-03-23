@@ -93,8 +93,8 @@ export function launchWithAgent(cwd: string, agentCommand: string): never {
     process.exit(result.status ?? 0);
   } else {
     if (!sessionExists(sessionName)) {
-      const wrappedCommand = `echo "Latch — starting ${agentCommand}..." && ${agentCommand}`;
-      run(`tmux new-session -d -s ${sessionName} -c '${cwd}' '${wrappedCommand}'`);
+      const loadingPy = join(__dirname, "..", "python", "loading.py");
+      run(`tmux new-session -d -s ${sessionName} -c '${cwd}' 'python3 "${loadingPy}" "${agentCommand}"'`);
     }
 
     const result = spawnSync("tmux", ["attach-session", "-t", sessionName], {
