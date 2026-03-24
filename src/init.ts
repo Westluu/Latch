@@ -25,6 +25,11 @@ function getSessionStartHookCommand(): string {
   return `node "${hookScript}"`;
 }
 
+function getPlanHookCommand(): string {
+  const hookScript = resolve(import.meta.dirname, "plan-hook.js");
+  return `node "${hookScript}"`;
+}
+
 function readSettings(): any {
   if (!existsSync(SETTINGS_PATH)) {
     return {};
@@ -73,6 +78,14 @@ function hasLatchSessionStartHook(settings: any): boolean {
   );
 }
 
+function hasLatchPlanHook(settings: any): boolean {
+  const postToolUse = settings.hooks?.PostToolUse;
+  if (!Array.isArray(postToolUse)) return false;
+  return postToolUse.some(
+    (entry: any) => entry.hooks?.some((h: any) => h.command?.includes("plan-hook"))
+  );
+}
+
 export function initHook(): void {
   const settings = readSettings();
 
@@ -109,6 +122,14 @@ export function initHook(): void {
     if (!Array.isArray(settings.hooks.SessionStart)) settings.hooks.SessionStart = [];
     settings.hooks.SessionStart.push({
       hooks: [{ type: "command", command: getSessionStartHookCommand(), timeout: 10 }],
+    });
+  }
+
+  if (!hasLatchPlanHook(settings)) {
+    if (!Array.isArray(settings.hooks.PostToolUse)) settings.hooks.PostToolUse = [];
+    settings.hooks.PostToolUse.push({
+      matcher: "ExitPlanMode",
+      hooks: [{ type: "command", command: getPlanHookCommand(), timeout: 15 }],
     });
   }
 
@@ -152,6 +173,14 @@ export function removeHook(): void {
       (entry: any) => !entry.hooks?.some((h: any) => h.command?.includes("session-start-hook"))
     );
     if (settings.hooks.SessionStart.length === 0) delete settings.hooks.SessionStart;
+    removed = true;
+  }
+
+  if (hasLatchPlanHook(settings)) {
+    settings.hooks.PostToolUse = settings.hooks.PostToolUse.filter(
+      (entry: any) => !entry.hooks?.some((h: any) => h.command?.includes("plan-hook"))
+    );
+    if (settings.hooks.PostToolUse.length === 0) delete settings.hooks.PostToolUse;
     removed = true;
   }
 

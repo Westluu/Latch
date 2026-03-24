@@ -22,10 +22,9 @@ export function getTraySocketPath(cwd: string, sessionId: string): string {
   return join(getSocketDir(), `${hash}-tray.sock`);
 }
 
-export type IpcMessage = {
-  type: "open";
-  filePath: string;
-};
+export type IpcMessage =
+  | { type: "open"; filePath: string }
+  | { type: "plan"; planFilePath: string };
 
 export type TurnFile = {
   path: string;
