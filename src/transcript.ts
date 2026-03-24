@@ -38,6 +38,21 @@ export function sessionIdFromTranscript(transcriptPath: string): string {
   return transcriptPath.replace(/\.jsonl$/, "").split("/").pop() ?? "";
 }
 
+export function planFileFromTranscript(transcriptPath: string): string | null {
+  try {
+    const lines = readFileSync(transcriptPath, "utf-8").split("\n");
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const obj = JSON.parse(line);
+        const slug = obj.slug as string | undefined;
+        if (slug) return join(homedir(), ".claude", "plans", `${slug}.md`);
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
 function backupPath(sessionId: string, backupFileName: string): string {
   return join(homedir(), ".claude", "file-history", sessionId, backupFileName);
 }

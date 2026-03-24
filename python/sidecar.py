@@ -1,5 +1,5 @@
 """
-Latch sidecar TUI — file list + diff viewer.
+Latch sidecar TUI — file list + diff viewer + plans viewer.
 
 Usage:
     python3 sidecar.py <cwd> [session_id]
@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import glob
 import hashlib
 import json
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -23,7 +23,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
-from textual.widgets import Footer, Header, ListItem, ListView, Static
+from textual.widgets import Footer, Header, ListItem, ListView, Markdown, Static
 
 # ── IPC helpers ──────────────────────────────────────────────────────────────
 
@@ -112,7 +112,6 @@ def get_changed_files(cwd: str) -> list[dict]:
             continue
         xy = line[:2].strip()
         path = line[3:]
-        # Handle rename "old -> new" format
         if " -> " in path:
             path = path.split(" -> ")[-1]
         status = STATUS_MAP.get(xy, "modified")
@@ -122,7 +121,6 @@ def get_changed_files(cwd: str) -> list[dict]:
 
 
 def get_diff(cwd: str, file_path: str) -> str:
-    # Try staged first, then unstaged
     for args in [
         ["git", "diff", "--cached", "--", file_path],
         ["git", "diff", "--", file_path],
@@ -130,7 +128,6 @@ def get_diff(cwd: str, file_path: str) -> str:
         r = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
         if r.stdout.strip():
             return r.stdout
-    # Untracked: show file contents with + prefix
     full = os.path.join(cwd, file_path)
     if os.path.exists(full):
         try:
@@ -157,15 +154,57 @@ def render_diff(diff_text: str) -> Text:
     return text
 
 
-# ── Custom ListItem ───────────────────────────────────────────────────────────
+# ── Plans helpers ─────────────────────────────────────────────────────────────
+
+PLANS_DIR = os.path.join(os.path.expanduser("~"), ".claude", "plans")
+CLAUDE_DIR = os.path.join(os.path.expanduser("~"), ".claude")
+
+
+def get_session_plan_path(cwd: str, session_id: str) -> Optional[str]:
+    """
+    Derive the plan file for this specific session by reading the slug from
+    the session transcript. Returns the plan path if the file exists, else None.
+    """
+    if not session_id:
+        return None
+    project_dir = cwd.replace("/", "-")
+    transcript = os.path.join(
+        CLAUDE_DIR, "projects", project_dir, f"{session_id}.jsonl"
+    )
+    if not os.path.exists(transcript):
+        return None
+    try:
+        with open(transcript) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    slug = obj.get("slug")
+                    if slug:
+                        plan_path = os.path.join(PLANS_DIR, f"{slug}.md")
+                        return plan_path  # return even if file doesn't exist yet
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return None
+
+
+def read_plan(plan_path: str) -> str:
+    try:
+        with open(plan_path) as f:
+            return f.read()
+    except Exception:
+        return "*Could not read plan file.*"
+
+
+# ── Custom ListItem widgets ───────────────────────────────────────────────────
 
 
 class FileListItem(ListItem):
-    """A list item that carries the file path as an attribute."""
-
-    def __init__(
-        self, file_path: str, status: str, label: str, max_width: int = 20
-    ) -> None:
+    def __init__(self, file_path: str, status: str, label: str, max_width: int = 20) -> None:
         self.file_path = file_path
         color = STATUS_COLORS.get(status, "#6B7280")
         name = os.path.basename(file_path)
@@ -174,11 +213,65 @@ class FileListItem(ListItem):
         super().__init__(Static(markup))
 
 
+class PlanListItem(ListItem):
+    def __init__(self, plan_path: str) -> None:
+        self.plan_path = plan_path
+        slug = os.path.basename(plan_path).replace(".md", "")
+        display = slug if len(slug) <= 24 else slug[:21] + "…"
+        markup = f"[#A78BFA]▸[/] {display}"
+        super().__init__(Static(markup))
+
+
 # ── Main App ──────────────────────────────────────────────────────────────────
 
 CSS = """
 Screen {
     background: #111827;
+}
+
+#tab-bar {
+    height: 1;
+    background: #1F2937;
+}
+
+#tab-files {
+    width: 50%;
+    content-align: center middle;
+    background: #1F2937;
+    color: #6B7280;
+}
+
+#tab-files.active {
+    background: #7C3AED;
+    color: #F9FAFB;
+}
+
+#tab-plans {
+    width: 50%;
+    content-align: center middle;
+    background: #1F2937;
+    color: #6B7280;
+}
+
+#tab-plans.active {
+    background: #7C3AED;
+    color: #F9FAFB;
+}
+
+#files-panel {
+    display: block;
+}
+
+#files-panel.hidden {
+    display: none;
+}
+
+#plans-panel {
+    display: none;
+}
+
+#plans-panel.active {
+    display: block;
 }
 
 #file-list {
@@ -201,6 +294,36 @@ Screen {
     border: round #7C3AED;
 }
 
+#plan-list {
+    width: 28%;
+    border: round #4B5563;
+    padding: 0 1;
+}
+
+#plan-list:focus-within {
+    border: round #7C3AED;
+}
+
+#plan-view {
+    width: 72%;
+    border: round #4B5563;
+    overflow-y: scroll;
+    padding: 0 1;
+}
+
+#plan-view:focus-within {
+    border: round #7C3AED;
+}
+
+#plan-view Markdown {
+    background: transparent;
+}
+
+#plan-empty {
+    color: #4B5563;
+    padding: 1 2;
+}
+
 ListView > ListItem {
     padding: 0 1;
     background: transparent;
@@ -221,6 +344,8 @@ class SidecarApp(App):
         Binding("j", "cursor_down", "Down"),
         Binding("k", "cursor_up", "Up"),
         Binding("tab", "focus_next", "Switch pane"),
+        Binding("1", "show_files", "Files"),
+        Binding("2", "show_plans", "Plans"),
     ]
 
     def __init__(self, cwd: str, session_id: str = "") -> None:
@@ -228,21 +353,34 @@ class SidecarApp(App):
         self.cwd = cwd
         self.session_id = session_id
         self._files: list[dict] = []
+        self._plan_files: list[str] = []
         self._selected_path: Optional[str] = None
+        self._active_tab: str = "files"
+        # Derive session plan path upfront (may not exist yet)
+        self._session_plan_path: Optional[str] = get_session_plan_path(cwd, session_id)
         self._ipc_server = None
         self._socket_path = get_socket_path(cwd, session_id)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
-        with Horizontal():
+        with Horizontal(id="tab-bar"):
+            yield Static("[1] Files", id="tab-files", classes="active")
+            yield Static("[2] Plans", id="tab-plans")
+        with Horizontal(id="files-panel"):
             yield ListView(id="file-list")
             with VerticalScroll(id="diff-view"):
                 yield Static("", id="diff-content")
+        with Horizontal(id="plans-panel"):
+            yield ListView(id="plan-list")
+            with VerticalScroll(id="plan-view"):
+                yield Markdown("", id="plan-markdown")
+                yield Static("No plan for this session yet.", id="plan-empty")
         yield Footer()
 
     async def on_mount(self) -> None:
         self.title = "LATCH"
         await self.refresh_files()
+        await self.refresh_plans()
         asyncio.get_event_loop().create_task(self._start_ipc())
 
     async def _start_ipc(self) -> None:
@@ -255,6 +393,15 @@ class SidecarApp(App):
                 await self.refresh_files()
                 if self._selected_path:
                     self._select_file_by_path(self._selected_path)
+            elif msg.get("type") == "plan":
+                plan_file_path = msg.get("planFilePath", "")
+                # Update the session plan path in case it wasn't resolved at startup
+                if plan_file_path:
+                    self._session_plan_path = plan_file_path
+                await self.refresh_plans()
+                self._switch_to_plans()
+                if self._plan_files:
+                    self._load_plan(self._plan_files[0])
 
         try:
             self._ipc_server = await start_ipc_server(self._socket_path, on_message)
@@ -275,6 +422,38 @@ class SidecarApp(App):
             list_view.index = 0
             self._load_diff(self._files[0]["path"])
 
+    async def refresh_plans(self) -> None:
+        """Show only the plan file for this session."""
+        plan_list = self.query_one("#plan-list", ListView)
+        await plan_list.clear()
+        self._plan_files = []
+
+        plan_path = self._session_plan_path
+        if plan_path and os.path.exists(plan_path):
+            self._plan_files = [plan_path]
+            await plan_list.append(PlanListItem(plan_path))
+            plan_list.index = 0
+            self._load_plan(plan_path)
+            self.query_one("#plan-empty").display = False
+            self.query_one("#plan-markdown").display = True
+        else:
+            self.query_one("#plan-empty").display = True
+            self.query_one("#plan-markdown").display = False
+
+    def _switch_to_files(self) -> None:
+        self._active_tab = "files"
+        self.query_one("#files-panel").remove_class("hidden")
+        self.query_one("#plans-panel").remove_class("active")
+        self.query_one("#tab-files").add_class("active")
+        self.query_one("#tab-plans").remove_class("active")
+
+    def _switch_to_plans(self) -> None:
+        self._active_tab = "plans"
+        self.query_one("#files-panel").add_class("hidden")
+        self.query_one("#plans-panel").add_class("active")
+        self.query_one("#tab-files").remove_class("active")
+        self.query_one("#tab-plans").add_class("active")
+
     def _select_file_by_path(self, file_path: str) -> None:
         list_view = self.query_one("#file-list", ListView)
         for i, f in enumerate(self._files):
@@ -290,21 +469,43 @@ class SidecarApp(App):
         rendered = render_diff(diff_text)
         self.query_one("#diff-content", Static).update(rendered)
 
+    def _load_plan(self, plan_path: str) -> None:
+        slug = os.path.basename(plan_path).replace(".md", "")
+        self.sub_title = slug
+        content = read_plan(plan_path)
+        self.query_one("#plan-markdown", Markdown).update(content)
+
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         item = event.item
         if isinstance(item, FileListItem):
             self._load_diff(item.file_path)
+        elif isinstance(item, PlanListItem):
+            self._load_plan(item.plan_path)
 
     def action_refresh(self) -> None:
-        self.run_worker(self.refresh_files(), exclusive=True)
+        if self._active_tab == "files":
+            self.run_worker(self.refresh_files(), exclusive=True)
+        else:
+            self.run_worker(self.refresh_plans(), exclusive=True)
 
     def action_cursor_down(self) -> None:
-        list_view = self.query_one("#file-list", ListView)
-        list_view.action_cursor_down()
+        if self._active_tab == "files":
+            self.query_one("#file-list", ListView).action_cursor_down()
+        else:
+            self.query_one("#plan-list", ListView).action_cursor_down()
 
     def action_cursor_up(self) -> None:
-        list_view = self.query_one("#file-list", ListView)
-        list_view.action_cursor_up()
+        if self._active_tab == "files":
+            self.query_one("#file-list", ListView).action_cursor_up()
+        else:
+            self.query_one("#plan-list", ListView).action_cursor_up()
+
+    def action_show_files(self) -> None:
+        self._switch_to_files()
+
+    def action_show_plans(self) -> None:
+        self.run_worker(self.refresh_plans(), exclusive=True)
+        self._switch_to_plans()
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
