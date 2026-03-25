@@ -100,7 +100,7 @@ process.stdin.on("end", async () => {
     }
 
     await sendTrayMessage(cwd, sessionId, { type: "turn", label: turn.label, files: turn.files, diffStats: turn.diffStats });
-    dbg("message sent");
+    dbg("tray message sent");
   } catch (e) {
     dbg("CAUGHT ERROR:", e);
   }

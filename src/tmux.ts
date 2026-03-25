@@ -161,6 +161,19 @@ export function focusOrOpenSidecar(cwd: string, sessionId: string = ""): void {
   saveSidecarPaneId(cwd, sessionId, newPaneId);
 }
 
+// ── chat popup ──────────────────────────────────────────────────────────────
+
+function chatCommand(cwd: string, sessionId: string): string {
+  const pythonChat = join(__dirname, "..", "python", "chat.py");
+  return `python3 "${pythonChat}" "${cwd}" "${sessionId}"`;
+}
+
+export function openChatPopup(cwd: string, sessionId: string): void {
+  run(
+    `tmux display-popup -w 80% -h 80% -E '${chatCommand(cwd, sessionId)}'`
+  );
+}
+
 // ── session cleanup ─────────────────────────────────────────────────────────
 
 /** Kill sidecar and tray panes for a given session, clean up pane ID files */

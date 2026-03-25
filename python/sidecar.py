@@ -394,7 +394,6 @@ class SidecarApp(App):
                 self._switch_to_plans()
                 if self._plan_files:
                     self._load_plan(self._plan_files[0])
-
         try:
             self._ipc_server = await start_ipc_server(self._socket_path, on_message)
             async with self._ipc_server:

@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 
-import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSession, launchWithAgent, saveSidecarPaneId, focusOrOpenSidecar } from "./tmux.js";
+import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSession, launchWithAgent, saveSidecarPaneId, focusOrOpenSidecar, openChatPopup } from "./tmux.js";
 import { sendSidecarMessage } from "./ipc.js";
 import { initHook, removeHook } from "./init.js";
+import { readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -15,6 +18,7 @@ Usage:
   latch claude       Launch Claude Code in a tmux session with Latch
   latch open <file>  Open a file in the Latch preview
   latch toggle       Focus sidecar if open, or open it if closed
+  latch chat         Open conversation viewer as a floating popup
   latch init         Add Claude Code hooks and tmux keybinding (CMD+E)
   latch remove       Remove the Claude Code hooks and tmux keybinding
   latch --help       Show this help message
@@ -50,6 +54,40 @@ if (command === "toggle") {
     process.exit(1);
   }
   focusOrOpenSidecar(cwd, "");
+  process.exit(0);
+}
+
+if (command === "chat") {
+  const cwd = process.cwd();
+  if (!isInsideTmux()) {
+    console.error("latch chat: must be run inside a tmux session.");
+    process.exit(1);
+  }
+  // Find the most recent transcript for this cwd
+  const projectDir = cwd.replace(/\//g, "-");
+  const projectPath = join(homedir(), ".claude", "projects", projectDir);
+  let sessionId: string;
+  try {
+    const files = readdirSync(projectPath)
+      .filter((f: string) => f.endsWith(".jsonl"))
+      .map((f: string) => ({ name: f, mtime: statSync(join(projectPath, f)).mtimeMs }))
+      .sort((a: { mtime: number }, b: { mtime: number }) => b.mtime - a.mtime);
+    if (files.length === 0) {
+      console.error("latch chat: no Claude sessions found for this directory.");
+      process.exit(1);
+    }
+    sessionId = files[0].name.replace(/\.jsonl$/, "");
+  } catch {
+    console.error("latch chat: no Claude sessions found for this directory.");
+    console.error("  looked in:", projectPath);
+    process.exit(1);
+  }
+  try {
+    openChatPopup(cwd, sessionId);
+  } catch (e: unknown) {
+    console.error("latch chat: failed to open popup:", (e as Error).message);
+    process.exit(1);
+  }
   process.exit(0);
 }
 
