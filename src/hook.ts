@@ -4,9 +4,13 @@
 
 import { existsSync, unlinkSync } from "node:fs";
 import { connect } from "node:net";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import { sendSidecarMessage, getSidecarSocketPath } from "./ipc.js";
 import { splitAndLaunchSidecar, saveSidecarPaneId } from "./tmux.js";
 import { sessionIdFromTranscript } from "./transcript.js";
+
+const PLANS_DIR = join(homedir(), ".claude", "plans");
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -77,8 +81,14 @@ process.stdin.on("end", async () => {
       }
     }
 
-    await sendSidecarMessage(cwd, sessionId, { type: "open", filePath: relative });
-    dbg("message sent");
+    // Plan file writes get a dedicated IPC type so the sidecar can switch tabs
+    if (filePath.startsWith(PLANS_DIR + "/")) {
+      await sendSidecarMessage(cwd, sessionId, { type: "plan", planFilePath: filePath });
+      dbg("plan message sent:", filePath);
+    } else {
+      await sendSidecarMessage(cwd, sessionId, { type: "open", filePath: relative });
+      dbg("message sent");
+    }
   } catch (err) {
     dbg("ERROR:", err);
   }

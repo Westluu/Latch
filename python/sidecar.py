@@ -262,16 +262,8 @@ Screen {
     display: block;
 }
 
-#files-panel.hidden {
-    display: none;
-}
-
 #plans-panel {
     display: none;
-}
-
-#plans-panel.active {
-    display: block;
 }
 
 #file-list {
@@ -442,15 +434,15 @@ class SidecarApp(App):
 
     def _switch_to_files(self) -> None:
         self._active_tab = "files"
-        self.query_one("#files-panel").remove_class("hidden")
-        self.query_one("#plans-panel").remove_class("active")
+        self.query_one("#files-panel").display = True
+        self.query_one("#plans-panel").display = False
         self.query_one("#tab-files").add_class("active")
         self.query_one("#tab-plans").remove_class("active")
 
     def _switch_to_plans(self) -> None:
         self._active_tab = "plans"
-        self.query_one("#files-panel").add_class("hidden")
-        self.query_one("#plans-panel").add_class("active")
+        self.query_one("#files-panel").display = False
+        self.query_one("#plans-panel").display = True
         self.query_one("#tab-files").remove_class("active")
         self.query_one("#tab-plans").add_class("active")
 
