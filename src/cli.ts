@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSession, launchWithAgent, saveSidecarPaneId } from "./tmux.js";
+import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSession, launchWithAgent, saveSidecarPaneId, focusOrOpenSidecar } from "./tmux.js";
 import { sendSidecarMessage } from "./ipc.js";
 import { initHook, removeHook } from "./init.js";
 
@@ -14,8 +14,9 @@ latch — terminal sidecar for agent-driven CLI workflows
 Usage:
   latch claude       Launch Claude Code in a tmux session with Latch
   latch open <file>  Open a file in the Latch preview
-  latch init         Add Claude Code hooks (auto-open files on edit)
-  latch remove       Remove the Claude Code hooks
+  latch toggle       Focus sidecar if open, or open it if closed
+  latch init         Add Claude Code hooks and tmux keybinding (CMD+E)
+  latch remove       Remove the Claude Code hooks and tmux keybinding
   latch --help       Show this help message
   latch --version    Show version
 `);
@@ -39,6 +40,16 @@ if (command && command in AGENTS) {
 
 if (command === "init") {
   initHook();
+  process.exit(0);
+}
+
+if (command === "toggle") {
+  const cwd = process.cwd();
+  if (!isInsideTmux()) {
+    console.error("latch toggle: must be run inside a tmux session.");
+    process.exit(1);
+  }
+  focusOrOpenSidecar(cwd, "");
   process.exit(0);
 }
 

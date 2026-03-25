@@ -141,6 +141,26 @@ export function getTrayPaneId(cwd: string, sessionId: string = ""): string | nul
   return readFileSync(p, "utf-8").trim() || null;
 }
 
+// ── sidecar toggle ──────────────────────────────────────────────────────────
+
+export function focusOrOpenSidecar(cwd: string, sessionId: string = ""): void {
+  const paneId = getSidecarPaneId(cwd, sessionId);
+  if (paneId) {
+    try {
+      run(`tmux display-message -t ${paneId} -p ''`);
+      // Pane is alive — switch focus to it
+      run(`tmux select-pane -t ${paneId}`);
+      return;
+    } catch {
+      // Pane is dead — clean up the stale ID file
+      try { unlinkSync(sidecarPanePath(cwd, sessionId)); } catch {}
+    }
+  }
+  // Open a new sidecar
+  const newPaneId = splitAndLaunchSidecar(cwd, sessionId);
+  saveSidecarPaneId(cwd, sessionId, newPaneId);
+}
+
 // ── session cleanup ─────────────────────────────────────────────────────────
 
 /** Kill sidecar and tray panes for a given session, clean up pane ID files */
