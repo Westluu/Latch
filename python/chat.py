@@ -989,15 +989,32 @@ class ChatApp(App):
             msg_list.append(MessageItem(msg))
             prev_role = msg.role
 
-    def _load_more_messages(self) -> None:
-        """Load the previous PAGE_SIZE messages and prepend them to the list."""
+    async def _load_more_messages(self) -> None:
+        """Prepend the previous PAGE_SIZE messages above the current view."""
         if self._msg_page_start == 0:
             return
+        old_start = self._msg_page_start
         self._msg_page_start = max(0, self._msg_page_start - PAGE_SIZE)
-        self._current_message_item = None
+
         msg_list = self.query_one("#message-list", MessageListView)
-        msg_list.clear()
+        msg_list.index = None
+
+        # Clear the entire list
+        await msg_list.clear()
+
+        # Repopulate from the new page start
         self._populate_message_list(msg_list)
+
+        # Find the child index of the first MessageItem that was the old top
+        target_idx = 0
+        for i, child in enumerate(msg_list.children):
+            if isinstance(child, MessageItem):
+                if child.msg is self._messages[old_start]:
+                    target_idx = i
+                    break
+
+        # Set index to that item — ListView's watch_index will scroll to it
+        msg_list.index = target_idx
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         if event.list_view.id == "session-list":
@@ -1025,13 +1042,13 @@ class ChatApp(App):
             else:
                 self._current_message_item = None
 
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
+    async def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.list_view.id == "session-list" and isinstance(event.item, SessionListItem):
             self._load_session(event.item.session)
             # Focus the message list after selecting a session
             self.query_one("#message-list", MessageListView).focus()
         elif event.list_view.id == "message-list" and isinstance(event.item, LoadMoreItem):
-            self._load_more_messages()
+            await self._load_more_messages()
         elif event.list_view.id == "message-list" and isinstance(event.item, MessageItem):
             event.item.toggle_thinking()
 
