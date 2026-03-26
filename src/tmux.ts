@@ -170,7 +170,7 @@ function chatCommand(cwd: string, sessionId: string): string {
 
 export function openChatPopup(cwd: string, sessionId: string): void {
   run(
-    `tmux display-popup -w 80% -h 80% -E '${chatCommand(cwd, sessionId)}'`
+    `tmux display-popup -w 90% -h 90% -E '${chatCommand(cwd, sessionId)}'`
   );
 }
 

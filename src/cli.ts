@@ -63,25 +63,19 @@ if (command === "chat") {
     console.error("latch chat: must be run inside a tmux session.");
     process.exit(1);
   }
-  // Find the most recent transcript for this cwd
+  // Find the most recent transcript for this cwd (optional — chat.py lists all sessions)
   const projectDir = cwd.replace(/\//g, "-");
   const projectPath = join(homedir(), ".claude", "projects", projectDir);
-  let sessionId: string;
+  let sessionId = "";
   try {
     const files = readdirSync(projectPath)
       .filter((f: string) => f.endsWith(".jsonl"))
       .map((f: string) => ({ name: f, mtime: statSync(join(projectPath, f)).mtimeMs }))
       .sort((a: { mtime: number }, b: { mtime: number }) => b.mtime - a.mtime);
-    if (files.length === 0) {
-      console.error("latch chat: no Claude sessions found for this directory.");
-      process.exit(1);
+    if (files.length > 0) {
+      sessionId = files[0].name.replace(/\.jsonl$/, "");
     }
-    sessionId = files[0].name.replace(/\.jsonl$/, "");
-  } catch {
-    console.error("latch chat: no Claude sessions found for this directory.");
-    console.error("  looked in:", projectPath);
-    process.exit(1);
-  }
+  } catch {}
   try {
     openChatPopup(cwd, sessionId);
   } catch (e: unknown) {
