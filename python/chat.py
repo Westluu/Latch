@@ -15,7 +15,6 @@ import re
 import shutil
 import sys
 import textwrap
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
@@ -25,7 +24,6 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header, Input, ListItem, ListView, Static
-from textual import work
 
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -1037,51 +1035,6 @@ class ChatApp(App):
         label_matches = [s for s in self._sessions if query_lower in s.label.lower()]
         self._filtered_sessions = label_matches
         self._render_session_list(label_matches, query)
-
-        pass
-
-    def _start_content_search(self, query: str, version: int) -> None:
-        """Launch threaded content search if version is still current."""
-        if version != self._search_version:
-            return
-        self._run_content_search(query, version)
-
-    @staticmethod
-    def _do_content_search(sessions: list[SessionInfo], query: str) -> list[SessionInfo]:
-        """Search message content across sessions in parallel."""
-        matches = []
-        with ThreadPoolExecutor(max_workers=min(8, max(4, os.cpu_count() or 4))) as pool:
-            futures = {pool.submit(search_session_content, s.path, query): s for s in sessions}
-            for future in as_completed(futures):
-                try:
-                    if future.result():
-                        matches.append(futures[future])
-                except Exception:
-                    pass
-        matches.sort(key=lambda s: s.timestamp or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
-        return matches
-
-    @work(thread=True)
-    def _run_content_search(self, query: str, version: int) -> None:
-        """Run content search in a background thread."""
-        # Only search sessions not already matched by label
-        query_lower = query.lower()
-        label_ids = {s.session_id for s in self._sessions if query_lower in s.label.lower()}
-        remaining = [s for s in self._sessions if s.session_id not in label_ids]
-
-        if not remaining:
-            return
-
-        content_matches = self._do_content_search(remaining, query)
-
-        if version != self._search_version:
-            return  # stale
-
-        # Merge label + content matches
-        label_matches = [s for s in self._sessions if s.session_id in label_ids]
-        combined = label_matches + content_matches
-        self._filtered_sessions = combined
-        self.call_from_thread(self._render_session_list, combined, query)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Move focus to session list when Enter is pressed in search."""
