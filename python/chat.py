@@ -15,6 +15,7 @@ import re
 import shutil
 import sys
 import textwrap
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
@@ -23,7 +24,8 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Footer, Header, ListItem, ListView, Static
+from textual.widgets import Footer, Header, Input, ListItem, ListView, Static
+from textual import work
 
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -169,6 +171,37 @@ def list_sessions(cwd: str) -> list[SessionInfo]:
 
     sessions.sort(key=lambda s: s.timestamp or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
     return sessions
+
+
+def search_session_content(path: str, query: str) -> bool:
+    """Check if any user/assistant message text in a session contains the query."""
+    query_lower = query.lower()
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                obj_type = obj.get("type")
+                if obj_type not in ("user", "assistant"):
+                    continue
+                msg = obj.get("message", {})
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    if query_lower in content.lower():
+                        return True
+                elif isinstance(content, list):
+                    for block in content:
+                        text = block.get("text", "") or block.get("thinking", "")
+                        if text and query_lower in text.lower():
+                            return True
+    except Exception:
+        pass
+    return False
 
 
 def parse_messages(cwd: str, session_id: str) -> list[Message]:
@@ -814,14 +847,30 @@ Screen {
     background: #111827;
 }
 
-#session-list {
+#left-panel {
     width: 30%;
     border: round #4B5563;
     padding: 0 1;
 }
 
-#session-list:focus-within {
+#left-panel:focus-within {
     border: round #7C3AED;
+}
+
+#search-input {
+    height: 1;
+    border: none;
+    background: #1F2937;
+    color: #F9FAFB;
+    padding: 0 1;
+    margin: 0 0 1 0;
+}
+
+#session-list {
+    height: 1fr;
+    background: transparent;
+    border: none;
+    padding: 0;
 }
 
 #right-panel {
@@ -864,10 +913,11 @@ class ChatApp(App):
     CSS = CSS
 
     BINDINGS = [
-        Binding("q", "quit", "Quit"),
+        Binding("q", "quit", "Quit", priority=False),
         Binding("escape", "quit", "Quit"),
         Binding("tab", "switch_pane", "Switch pane"),
-        Binding("r", "refresh", "Refresh"),
+        Binding("r", "refresh", "Refresh", priority=False),
+        Binding("slash", "focus_search", "Search", show=False, priority=False),
     ]
 
     def __init__(self, cwd: str, session_id: str = "") -> None:
@@ -884,11 +934,17 @@ class ChatApp(App):
         self._session_cache: dict[str, list[Message]] = {}
         # Pagination: index into _messages where the current view starts
         self._msg_page_start: int = 0
+        # Search state
+        self._search_version: int = 0
+        self._filtered_sessions: list[SessionInfo] = []
+        self._rendering_session_list: bool = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
         with Horizontal():
-            yield SessionListView(id="session-list")
+            with Vertical(id="left-panel"):
+                yield Input(placeholder="Search sessions… (/)", id="search-input")
+                yield SessionListView(id="session-list")
             with Vertical(id="right-panel"):
                 yield Static("", id="session-header")
                 yield Static("Select a session.", id="msg-empty")
@@ -898,23 +954,46 @@ class ChatApp(App):
     def on_mount(self) -> None:
         self.title = "LATCH CHAT"
         self._load_sessions()
+        # Focus session list on startup, not the search input
+        self.query_one("#session-list", SessionListView).focus()
 
     def _load_sessions(self) -> None:
         self._sessions = list_sessions(self.cwd)
+        self._filtered_sessions = self._sessions
 
+        self._render_session_list(self._sessions)
+
+        # Auto-select initial session
+        target_session: Optional[SessionInfo] = None
+        if self._initial_session_id:
+            for s in self._sessions:
+                if s.session_id == self._initial_session_id:
+                    target_session = s
+                    break
+        elif self._sessions:
+            target_session = self._sessions[0]
+
+        if target_session is not None:
+            self._load_session(target_session)
+
+    def _render_session_list(self, sessions: list[SessionInfo], query: str = "") -> None:
+        """Render the given sessions into the session list widget."""
+        self._rendering_session_list = True
         session_list = self.query_one("#session-list", SessionListView)
         session_list.clear()
+        self._highlighted_session_item = None
 
         # Group sessions by time
         groups: dict[str, list[SessionInfo]] = {}
-        for s in self._sessions:
+        for s in sessions:
             g = time_group(s.timestamp)
             groups.setdefault(g, []).append(s)
 
-        count = len(self._sessions)
-        session_list.append(GroupHeader(f"Sessions {count}"))
+        count = len(sessions)
+        header = f"Results {count}" if query else f"Sessions {count}"
+        session_list.append(GroupHeader(header))
 
-        item_index = 1  # 0 = "Sessions N" header
+        item_index = 1
         first_session_idx: Optional[int] = None
         first_group = True
         for group_name in ["Today", "Yesterday", "This Week", "Older"]:
@@ -933,21 +1012,89 @@ class ChatApp(App):
                 session_list.append(SessionListItem(s))
                 item_index += 1
 
-        # Auto-select initial session and visually highlight it in the list
-        target_session: Optional[SessionInfo] = None
-        if self._initial_session_id:
-            for s in self._sessions:
-                if s.session_id == self._initial_session_id:
-                    target_session = s
-                    break
-        elif self._sessions:
-            target_session = self._sessions[0]
-
-        if target_session is not None:
-            self._load_session(target_session)
-
         if first_session_idx is not None:
             session_list.index = first_session_idx
+        self._rendering_session_list = False
+
+    # ── Search ────────────────────────────────────────────────────────────────
+
+    def action_focus_search(self) -> None:
+        self.query_one("#search-input", Input).focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "search-input":
+            return
+        self._search_version += 1
+        query = event.value.strip()
+
+        if not query:
+            self._filtered_sessions = self._sessions
+            self._render_session_list(self._sessions)
+            return
+
+        # Instant label filter
+        query_lower = query.lower()
+        label_matches = [s for s in self._sessions if query_lower in s.label.lower()]
+        self._filtered_sessions = label_matches
+        self._render_session_list(label_matches, query)
+
+        pass
+
+    def _start_content_search(self, query: str, version: int) -> None:
+        """Launch threaded content search if version is still current."""
+        if version != self._search_version:
+            return
+        self._run_content_search(query, version)
+
+    @staticmethod
+    def _do_content_search(sessions: list[SessionInfo], query: str) -> list[SessionInfo]:
+        """Search message content across sessions in parallel."""
+        matches = []
+        with ThreadPoolExecutor(max_workers=min(8, max(4, os.cpu_count() or 4))) as pool:
+            futures = {pool.submit(search_session_content, s.path, query): s for s in sessions}
+            for future in as_completed(futures):
+                try:
+                    if future.result():
+                        matches.append(futures[future])
+                except Exception:
+                    pass
+        matches.sort(key=lambda s: s.timestamp or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+        return matches
+
+    @work(thread=True)
+    def _run_content_search(self, query: str, version: int) -> None:
+        """Run content search in a background thread."""
+        # Only search sessions not already matched by label
+        query_lower = query.lower()
+        label_ids = {s.session_id for s in self._sessions if query_lower in s.label.lower()}
+        remaining = [s for s in self._sessions if s.session_id not in label_ids]
+
+        if not remaining:
+            return
+
+        content_matches = self._do_content_search(remaining, query)
+
+        if version != self._search_version:
+            return  # stale
+
+        # Merge label + content matches
+        label_matches = [s for s in self._sessions if s.session_id in label_ids]
+        combined = label_matches + content_matches
+        self._filtered_sessions = combined
+        self.call_from_thread(self._render_session_list, combined, query)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Move focus to session list when Enter is pressed in search."""
+        if event.input.id == "search-input":
+            self.query_one("#session-list", SessionListView).focus()
+
+    def action_quit(self) -> None:
+        focused = self.focused
+        if isinstance(focused, Input) and focused.id == "search-input":
+            focused.value = ""
+            self.query_one("#session-list", SessionListView).focus()
+            return
+        self.exit()
 
     def _load_session(self, session: SessionInfo) -> None:
         self._selected_session = session
@@ -1018,15 +1165,24 @@ class ChatApp(App):
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         if event.list_view.id == "session-list":
+            # Skip highlight updates triggered by search re-rendering
+            if self._rendering_session_list:
+                return
             # Only update the two affected items instead of all SessionListItems
             if self._highlighted_session_item is not None:
-                s = self._highlighted_session_item.query_one(Static)
-                s.styles.background = "transparent"
-                s.styles.color = "#9CA3AF"
+                try:
+                    s = self._highlighted_session_item.query_one(Static)
+                    s.styles.background = "transparent"
+                    s.styles.color = "#9CA3AF"
+                except Exception:
+                    pass
             if isinstance(event.item, SessionListItem):
-                s = event.item.query_one(Static)
-                s.styles.background = "#374151"
-                s.styles.color = "#F9FAFB"
+                try:
+                    s = event.item.query_one(Static)
+                    s.styles.background = "#374151"
+                    s.styles.color = "#F9FAFB"
+                except Exception:
+                    pass
                 self._highlighted_session_item = event.item
                 self._load_session(event.item.session)
             else:
