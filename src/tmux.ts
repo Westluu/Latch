@@ -163,14 +163,16 @@ export function focusOrOpenSidecar(cwd: string, sessionId: string = ""): void {
 
 // ── chat popup ──────────────────────────────────────────────────────────────
 
-function chatCommand(cwd: string, sessionId: string): string {
+function chatCommand(cwd: string, sessionId: string, claudePane: string): string {
   const pythonChat = join(__dirname, "..", "python", "chat.py");
-  return `python3 "${pythonChat}" "${cwd}" "${sessionId}"`;
+  return `python3 "${pythonChat}" "${cwd}" "${sessionId}" "${claudePane}"`;
 }
 
 export function openChatPopup(cwd: string, sessionId: string): void {
+  // Capture the active pane ID so chat.py can send /resume commands to it
+  const claudePane = run(`tmux display-message -p '#{pane_id}'`);
   run(
-    `tmux display-popup -w 90% -h 90% -E '${chatCommand(cwd, sessionId)}'`
+    `tmux display-popup -w 90% -h 90% -E '${chatCommand(cwd, sessionId, claudePane)}'`
   );
 }
 

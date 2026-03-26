@@ -916,12 +916,14 @@ class ChatApp(App):
         Binding("tab", "switch_pane", "Switch pane"),
         Binding("r", "refresh", "Refresh", priority=False),
         Binding("slash", "focus_search", "Search", show=False, priority=False),
+        Binding("o", "resume_session", "Resume", priority=False),
     ]
 
-    def __init__(self, cwd: str, session_id: str = "") -> None:
+    def __init__(self, cwd: str, session_id: str = "", claude_pane: str = "") -> None:
         super().__init__()
         self.cwd = cwd
         self._initial_session_id = session_id
+        self._claude_pane = claude_pane
         self._sessions: list[SessionInfo] = []
         self._messages: list[Message] = []
         self._selected_session: Optional[SessionInfo] = None
@@ -1047,6 +1049,18 @@ class ChatApp(App):
             focused.value = ""
             self.query_one("#session-list", SessionListView).focus()
             return
+        self.exit()
+
+    def action_resume_session(self) -> None:
+        """Send /resume to the Claude pane and close the chat viewer."""
+        if not self._selected_session or not self._claude_pane:
+            return
+        sid = self._selected_session.session_id
+        import subprocess
+        subprocess.run(
+            ["tmux", "send-keys", "-t", self._claude_pane, f"/resume {sid}", "Enter"],
+            capture_output=True,
+        )
         self.exit()
 
     def _load_session(self, session: SessionInfo) -> None:
@@ -1180,15 +1194,16 @@ class ChatApp(App):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python3 chat.py <cwd> [session_id]", file=sys.stderr)
+        print("Usage: python3 chat.py <cwd> [session_id] [claude_pane]", file=sys.stderr)
         sys.exit(1)
 
     cwd = os.path.abspath(sys.argv[1])
     session_id = sys.argv[2] if len(sys.argv) > 2 else ""
+    claude_pane = sys.argv[3] if len(sys.argv) > 3 else ""
 
     if not os.path.isdir(cwd):
         print(f"Error: {cwd!r} is not a directory", file=sys.stderr)
         sys.exit(1)
 
-    app = ChatApp(cwd, session_id)
+    app = ChatApp(cwd, session_id, claude_pane)
     app.run()
