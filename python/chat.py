@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sys
 import textwrap
 from dataclasses import dataclass, field
@@ -256,8 +257,11 @@ def parse_messages(cwd: str, session_id: str) -> list[Message]:
                 elif bt == "tool_use":
                     inp = block.get("input", {})
                     tool_file = inp.get("file_path") or inp.get("command") or inp.get("pattern") or ""
-                    if isinstance(tool_file, str) and len(tool_file) > 80:
-                        tool_file = tool_file[:77] + "..."
+                    if isinstance(tool_file, str):
+                        # Collapse newlines/tabs so multi-line commands render on one line
+                        tool_file = " ".join(tool_file.split())
+                        if len(tool_file) > 80:
+                            tool_file = tool_file[:77] + "..."
                     tid = block.get("id", "")
                     block_idx = len(blocks)
                     cb = ContentBlock(
@@ -386,7 +390,124 @@ def format_ts(dt: Optional[datetime]) -> str:
 
 # ── Rendering ────────────────────────────────────────────────────────────────
 
-def render_one_message(msg: Message, selected: bool = False, show_separator: bool = False) -> Text:
+_MD_INLINE = re.compile(r"(\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`)")
+
+
+def _append_inline(text: Text, s: str) -> None:
+    """Append string with **bold**, *italic*, and `code` styling."""
+    for part in _MD_INLINE.split(s):
+        if not part:
+            continue
+        if part.startswith("**") and part.endswith("**") and len(part) > 4:
+            text.append(part[2:-2], style="bold #F9FAFB")
+        elif part.startswith("*") and part.endswith("*") and len(part) > 2:
+            text.append(part[1:-1], style="italic #E5E7EB")
+        elif part.startswith("`") and part.endswith("`") and len(part) > 2:
+            text.append(part[1:-1], style="#F97316")
+        else:
+            text.append(part)
+
+
+def _wrap_inline(
+    text: Text,
+    content: str,
+    first_prefix: str,
+    cont_prefix: str,
+    wrap_w: int,
+    prefix_style: str = "#6B7280",
+) -> None:
+    """Word-wrap content with inline markdown styling.
+    First line gets first_prefix (styled), continuation lines get cont_prefix."""
+    avail_first = max(10, wrap_w - len(first_prefix))
+    avail_cont  = max(10, wrap_w - len(cont_prefix))
+
+    words = content.split()
+    cur: list[str] = []
+    cur_vis = 0
+    is_first = True
+
+    def flush() -> None:
+        nonlocal is_first, cur_vis
+        pfx = first_prefix if is_first else cont_prefix
+        sty = prefix_style if is_first else ""
+        text.append(pfx, style=sty)
+        _append_inline(text, " ".join(cur))
+        text.append("\n")
+        is_first = False
+        cur.clear()
+        cur_vis = 0
+
+    for word in words:
+        vis = len(re.sub(r"\*\*|`|\*", "", word))
+        avail = avail_first if is_first else avail_cont
+        if cur and cur_vis + 1 + vis > avail:
+            flush()
+        else:
+            if cur:
+                cur_vis += 1
+        cur.append(word)
+        cur_vis += vis
+
+    if cur:
+        flush()
+
+
+def _append_md(text: Text, content: str, indent: str, wrap_w: int) -> None:
+    """Render markdown content into Rich Text with given indent and wrap width."""
+    in_code = False
+    for line in content.splitlines():
+        raw = line.rstrip()
+
+        # Code fence toggle
+        if raw.lstrip().startswith("```"):
+            in_code = not in_code
+            continue
+
+        if in_code:
+            text.append(f"{indent}  {raw}\n", style="#D1D5DB on #1F2937")
+            continue
+
+        # Empty line
+        if not raw.strip():
+            text.append("\n")
+            continue
+
+        # Heading
+        m = re.match(r"^(#{1,3}) (.*)", raw)
+        if m:
+            text.append(indent)
+            _append_inline(text, m.group(2))
+            text.append("\n")
+            continue
+
+        # Horizontal rule
+        if re.match(r"^[-*_]{3,}$", raw.strip()):
+            text.append(f"{indent}{'─' * 24}\n", style="#374151")
+            continue
+
+        # Bullet list — continuation aligns with text after "• "
+        m = re.match(r"^(\s*)[-*+] (.*)", raw)
+        if m:
+            extra = "  " * (len(m.group(1)) // 2)
+            first_pfx = f"{indent}{extra}  • "
+            cont_pfx  = " " * len(first_pfx)
+            _wrap_inline(text, m.group(2), first_pfx, cont_pfx, wrap_w)
+            continue
+
+        # Numbered list — continuation aligns with text after "N. "
+        m = re.match(r"^(\s*)(\d+)\. (.*)", raw)
+        if m:
+            extra = "  " * (len(m.group(1)) // 2)
+            first_pfx = f"{indent}{extra}  {m.group(2)}. "
+            cont_pfx  = " " * len(first_pfx)
+            _wrap_inline(text, m.group(3), first_pfx, cont_pfx, wrap_w)
+            continue
+
+        # Regular paragraph
+        _wrap_inline(text, raw, indent, indent, wrap_w, prefix_style="")
+
+
+def render_one_message(msg: Message, selected: bool = False, thinking_expanded: bool = False) -> Text:
     """Render a single message as Rich Text, with cursor prefix if selected."""
     text = Text()
 
@@ -403,6 +524,9 @@ def render_one_message(msg: Message, selected: bool = False, show_separator: boo
         text.append(ts_str, style="#6B7280")
         text.append("you", style="bold #10B981")
         text.append("\n")
+        # Blank line between header and content (matches sidecar)
+        if msg.blocks:
+            text.append("\n")
     else:
         text.append(ts_str, style="#6B7280")
         text.append("claude", style="bold #3B82F6")
@@ -418,41 +542,72 @@ def render_one_message(msg: Message, selected: bool = False, show_separator: boo
             )
         text.append("\n")
 
-    # Content blocks (4-space indent)
+    # Content blocks — 4-space indent for text, 2-space for block items (matches sidecar)
     for block in msg.blocks:
         if block.kind == "text":
-            # Dedent removes common leading whitespace (e.g. /model sub-options),
-            # rstrip removes trailing newlines that would cause double blank lines
             content = textwrap.dedent(block.text).rstrip()
-            for line in content.splitlines():
-                text.append(f"    {line}\n")
+            if msg.role == "user":
+                term_w = shutil.get_terminal_size((120, 40)).columns
+                wrap_w = max(40, int(term_w * 0.68) - 10)
+                for para in content.split("\n\n"):
+                    flat = " ".join(ln.strip() for ln in para.splitlines() if ln.strip())
+                    if flat:
+                        wrapped = textwrap.fill(
+                            flat, width=wrap_w,
+                            initial_indent="    ",
+                            subsequent_indent="    ",
+                        )
+                        text.append(wrapped + "\n")
+            else:
+                term_w = shutil.get_terminal_size((120, 40)).columns
+                wrap_w = max(40, int(term_w * 0.68) - 10)
+                _append_md(text, content, "    ", wrap_w)
         elif block.kind == "thinking":
             tc = format_k(block.token_count) if block.token_count else "?"
-            # Collapse whitespace and truncate preview (rune-safe)
-            preview = " ".join(block.text.split())
-            if len(preview) > 80:
-                preview = preview[:77] + "..."
-            # "◈ thinking (N tokens) ▶" all in italic purple, preview in muted (matches sidecar)
-            text.append("    \u25c8 ", style="italic #C084FC")
-            text.append(f"thinking ({tc} tokens) \u25b6", style="italic #C084FC")
-            if preview:
-                text.append(f" {preview}", style="#6B7280")
-            text.append("\n")
+            if thinking_expanded:
+                text.append("  \u25c8 ", style="italic #C084FC")
+                text.append(f"thinking ({tc} tokens) \u25bc", style="italic #C084FC")
+                text.append("  [enter to collapse]\n", style="#4B5563")
+                term_w = shutil.get_terminal_size((120, 40)).columns
+                wrap_w = max(40, int(term_w * 0.68) - 10)
+                for tline in block.text.splitlines():
+                    if tline.strip():
+                        wrapped = textwrap.fill(tline, width=wrap_w,
+                                                initial_indent="    ",
+                                                subsequent_indent="    ")
+                        text.append(wrapped + "\n", style="#9CA3AF")
+                    else:
+                        text.append("\n")
+            else:
+                preview = " ".join(block.text.split())
+                if len(preview) > 80:
+                    preview = preview[:77] + "..."
+                text.append("  \u25c8 ", style="italic #C084FC")
+                text.append(f"thinking ({tc} tokens) \u25b6", style="italic #C084FC")
+                if preview:
+                    text.append(f" {preview}", style="#6B7280")
+                text.append("\n")
         elif block.kind == "tool_use":
             icon = TOOL_ICONS.get(block.tool_name, "\u2699")
             if block.is_error:
-                # ✗ (U+2717) matches sidecar's error indicator
-                text.append("    \u2717 ", style="#EF4444")
+                text.append("  \u2717 ", style="#EF4444")
                 text.append(f"{block.tool_name}", style="#EF4444")
             else:
-                text.append(f"    {icon} ", style="#6B7280")
+                text.append(f"  {icon} ", style="#6B7280")
                 text.append(f"{block.tool_name}", style="#93C5FD")
             if block.tool_file:
                 text.append(f": {block.tool_file}", style="#6B7280")
             text.append("\n")
-            # Output preview — first meaningful line in muted style (matches sidecar collapsed view)
+            # Output preview — wrap with hanging indent so continuation stays aligned
             if block.text:
-                text.append(f"    \u2192 {block.text}\n", style="#6B7280")
+                term_w = shutil.get_terminal_size((120, 40)).columns
+                wrap_w = max(40, int(term_w * 0.68) - 6)
+                wrapped = textwrap.fill(
+                    block.text, width=wrap_w,
+                    initial_indent="    \u2192 ",
+                    subsequent_indent="      ",
+                )
+                text.append(wrapped + "\n", style="#6B7280")
 
     text.append("\n")  # spacing between messages
     return text
@@ -621,18 +776,35 @@ class MessageItem(ListItem):
 
     def __init__(self, msg: Message) -> None:
         self.msg = msg
-        # Pre-render both states to avoid re-computing on every navigation
+        self._selected = False
+        self._thinking_expanded = False
         self._text_normal = render_one_message(msg, selected=False)
         self._text_selected = render_one_message(msg, selected=True)
         super().__init__(Static(self._text_normal))
 
     def set_selected(self, selected: bool) -> None:
-        self.query_one(Static).update(
-            self._text_selected if selected else self._text_normal
-        )
+        self._selected = selected
+        self._refresh()
         bg = "#374151" if selected else "transparent"
         self.styles.background = bg
         self.query_one(Static).styles.background = bg
+
+    def toggle_thinking(self) -> None:
+        has_thinking = any(b.kind == "thinking" for b in self.msg.blocks)
+        if not has_thinking:
+            return
+        self._thinking_expanded = not self._thinking_expanded
+        # Re-render with new expanded state
+        self._text_normal = render_one_message(self.msg, selected=False,
+                                               thinking_expanded=self._thinking_expanded)
+        self._text_selected = render_one_message(self.msg, selected=True,
+                                                 thinking_expanded=self._thinking_expanded)
+        self._refresh()
+
+    def _refresh(self) -> None:
+        self.query_one(Static).update(
+            self._text_selected if self._selected else self._text_normal
+        )
 
 
 # ── Main App ─────────────────────────────────────────────────────────────────
@@ -742,26 +914,40 @@ class ChatApp(App):
         count = len(self._sessions)
         session_list.append(GroupHeader(f"Sessions {count}"))
 
+        item_index = 1  # 0 = "Sessions N" header
+        first_session_idx: Optional[int] = None
         first_group = True
         for group_name in ["Today", "Yesterday", "This Week", "Older"]:
             if group_name not in groups:
                 continue
             if not first_group and group_name in ("Yesterday", "This Week"):
                 session_list.append(GroupHeader(""))
+                item_index += 1
             first_group = False
             group_sessions = groups[group_name]
             session_list.append(GroupHeader(f"{group_name} ({len(group_sessions)})"))
+            item_index += 1
             for s in group_sessions:
+                if first_session_idx is None:
+                    first_session_idx = item_index
                 session_list.append(SessionListItem(s))
+                item_index += 1
 
-        # Auto-select initial session
+        # Auto-select initial session and visually highlight it in the list
+        target_session: Optional[SessionInfo] = None
         if self._initial_session_id:
             for s in self._sessions:
                 if s.session_id == self._initial_session_id:
-                    self._load_session(s)
+                    target_session = s
                     break
         elif self._sessions:
-            self._load_session(self._sessions[0])
+            target_session = self._sessions[0]
+
+        if target_session is not None:
+            self._load_session(target_session)
+
+        if first_session_idx is not None:
+            session_list.index = first_session_idx
 
     def _load_session(self, session: SessionInfo) -> None:
         self._selected_session = session
@@ -825,6 +1011,7 @@ class ChatApp(App):
                 s.styles.background = "#374151"
                 s.styles.color = "#F9FAFB"
                 self._highlighted_session_item = event.item
+                self._load_session(event.item.session)
             else:
                 self._highlighted_session_item = None
 
@@ -845,6 +1032,8 @@ class ChatApp(App):
             self.query_one("#message-list", MessageListView).focus()
         elif event.list_view.id == "message-list" and isinstance(event.item, LoadMoreItem):
             self._load_more_messages()
+        elif event.list_view.id == "message-list" and isinstance(event.item, MessageItem):
+            event.item.toggle_thinking()
 
     def action_switch_pane(self) -> None:
         session_list = self.query_one("#session-list", SessionListView)

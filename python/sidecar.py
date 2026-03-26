@@ -466,6 +466,13 @@ class SidecarApp(App):
         content = read_plan(plan_path)
         self.query_one("#plan-markdown", Markdown).update(content)
 
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        item = event.item
+        if isinstance(item, FileListItem):
+            self._load_diff(item.file_path)
+        elif isinstance(item, PlanListItem):
+            self._load_plan(item.plan_path)
+
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         item = event.item
         if isinstance(item, FileListItem):
@@ -479,17 +486,32 @@ class SidecarApp(App):
         else:
             self.run_worker(self.refresh_plans(), exclusive=True)
 
+    def _update_preview_for_current(self) -> None:
+        """Load the diff/plan for the currently highlighted list item."""
+        if self._active_tab == "files":
+            lv = self.query_one("#file-list", ListView)
+            item = lv.highlighted_child
+            if isinstance(item, FileListItem):
+                self._load_diff(item.file_path)
+        else:
+            lv = self.query_one("#plan-list", ListView)
+            item = lv.highlighted_child
+            if isinstance(item, PlanListItem):
+                self._load_plan(item.plan_path)
+
     def action_cursor_down(self) -> None:
         if self._active_tab == "files":
             self.query_one("#file-list", ListView).action_cursor_down()
         else:
             self.query_one("#plan-list", ListView).action_cursor_down()
+        self._update_preview_for_current()
 
     def action_cursor_up(self) -> None:
         if self._active_tab == "files":
             self.query_one("#file-list", ListView).action_cursor_up()
         else:
             self.query_one("#plan-list", ListView).action_cursor_up()
+        self._update_preview_for_current()
 
     def action_show_files(self) -> None:
         self._switch_to_files()
