@@ -32,6 +32,17 @@ export type ParsedTurn = {
   diffStats: { added: number; removed: number };
 };
 
+export type ToolUseInfo = {
+  name: string;
+  file?: string;
+};
+
+export type ConversationMessage = {
+  role: "user" | "assistant";
+  content: string;
+  tools?: ToolUseInfo[];
+};
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 export function sessionIdFromTranscript(transcriptPath: string): string {
@@ -271,6 +282,63 @@ export function parseAllTurns(cwd: string, transcriptPath: string, sessionId: st
   }
 
   return turns;
+}
+
+/** Parse full conversation messages from a transcript */
+export function parseConversation(transcriptPath: string): ConversationMessage[] {
+  const lines = readFileSync(transcriptPath, "utf-8").trim().split("\n");
+  const messages: ConversationMessage[] = [];
+
+  for (const line of lines) {
+    let obj: ParsedLine;
+    try { obj = JSON.parse(line); } catch { continue; }
+
+    if (obj.type === "user" && isRealUserMsg(obj)) {
+      const text = extractTextContent(obj);
+      if (text) messages.push({ role: "user", content: text });
+    } else if (obj.type === "assistant") {
+      const msg = obj.message as Record<string, unknown> | undefined;
+      const content = msg?.content;
+      if (!Array.isArray(content)) continue;
+
+      const textParts: string[] = [];
+      const tools: ToolUseInfo[] = [];
+
+      for (const block of content) {
+        const b = block as Record<string, unknown>;
+        if (b.type === "text" && typeof b.text === "string") {
+          textParts.push(b.text);
+        } else if (b.type === "tool_use") {
+          const input = b.input as Record<string, unknown> | undefined;
+          tools.push({
+            name: b.name as string,
+            file: (input?.file_path as string) ?? (input?.command as string) ?? undefined,
+          });
+        }
+      }
+
+      const text = textParts.join("\n").trim();
+      if (text || tools.length > 0) {
+        messages.push({ role: "assistant", content: text, tools: tools.length > 0 ? tools : undefined });
+      }
+    }
+  }
+
+  return messages;
+}
+
+function extractTextContent(obj: ParsedLine): string {
+  const msg = obj.message as Record<string, unknown> | undefined;
+  const content = msg?.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((b: Record<string, unknown>) => b?.type === "text")
+      .map((b: Record<string, unknown>) => b.text as string)
+      .join("\n")
+      .trim();
+  }
+  return "";
 }
 
 /** Quick check: does this transcript contain any Write/Edit tool uses? */

@@ -10,6 +10,8 @@ const TMUX_CONF_PATH = join(homedir(), ".tmux.conf");
 const TMUX_MARKER = "# latch-keybinding";
 // CMD+E in iTerm2 sends ESC+e (M-e) when configured to send escape sequence "e"
 const TMUX_KEYBINDING_LINE = `bind-key -n M-e run-shell "latch toggle"`;
+const TMUX_CHAT_KEYBINDING_LINE = `bind-key -n M-s run-shell "latch chat"`;
+const TMUX_CHAT_MARKER = "# latch-chat-keybinding";
 
 function getHookCommand(): string {
   const hookScript = resolve(import.meta.dirname, "hook.js");
@@ -107,6 +109,7 @@ function detectTerminal(): SupportedTerminal {
 
 const GHOSTTY_CONF = join(homedir(), ".config", "ghostty", "config");
 const GHOSTTY_KEYBINDING = "keybind = cmd+e=text:\\x1be";
+const GHOSTTY_CHAT_KEYBINDING = "keybind = cmd+s=text:\\x1bs";
 
 function hasGhosttyKeybinding(): boolean {
   if (!existsSync(GHOSTTY_CONF)) return false;
@@ -116,13 +119,15 @@ function hasGhosttyKeybinding(): boolean {
 function addGhosttyKeybinding(): void {
   mkdirSync(join(homedir(), ".config", "ghostty"), { recursive: true });
   const existing = existsSync(GHOSTTY_CONF) ? readFileSync(GHOSTTY_CONF, "utf-8") : "";
-  writeFileSync(GHOSTTY_CONF, existing + `\n${TMUX_MARKER}\n${GHOSTTY_KEYBINDING}\n`);
+  writeFileSync(GHOSTTY_CONF, existing + `\n${TMUX_MARKER}\n${GHOSTTY_KEYBINDING}\n${GHOSTTY_CHAT_KEYBINDING}\n`);
 }
 
 function removeGhosttyKeybinding(): void {
   if (!existsSync(GHOSTTY_CONF)) return;
   const content = readFileSync(GHOSTTY_CONF, "utf-8");
-  const cleaned = content.replace(new RegExp(`\\n?${TMUX_MARKER}\\n${GHOSTTY_KEYBINDING}\\n?`, "g"), "\n");
+  const cleaned = content
+    .replace(new RegExp(`\\n?${TMUX_MARKER}\\n${GHOSTTY_KEYBINDING}\\n${GHOSTTY_CHAT_KEYBINDING}\\n?`, "g"), "\n")
+    .replace(new RegExp(`\\n?${TMUX_MARKER}\\n${GHOSTTY_KEYBINDING}\\n?`, "g"), "\n");
   writeFileSync(GHOSTTY_CONF, cleaned);
 }
 
@@ -130,6 +135,7 @@ function removeGhosttyKeybinding(): void {
 
 const KITTY_CONF = join(homedir(), ".config", "kitty", "kitty.conf");
 const KITTY_KEYBINDING = "map cmd+e send_text all \\x1be";
+const KITTY_CHAT_KEYBINDING = "map cmd+s send_text all \\x1bs";
 
 function hasKittyKeybinding(): boolean {
   if (!existsSync(KITTY_CONF)) return false;
@@ -139,13 +145,15 @@ function hasKittyKeybinding(): boolean {
 function addKittyKeybinding(): void {
   mkdirSync(join(homedir(), ".config", "kitty"), { recursive: true });
   const existing = existsSync(KITTY_CONF) ? readFileSync(KITTY_CONF, "utf-8") : "";
-  writeFileSync(KITTY_CONF, existing + `\n${TMUX_MARKER}\n${KITTY_KEYBINDING}\n`);
+  writeFileSync(KITTY_CONF, existing + `\n${TMUX_MARKER}\n${KITTY_KEYBINDING}\n${KITTY_CHAT_KEYBINDING}\n`);
 }
 
 function removeKittyKeybinding(): void {
   if (!existsSync(KITTY_CONF)) return;
   const content = readFileSync(KITTY_CONF, "utf-8");
-  const cleaned = content.replace(new RegExp(`\\n?${TMUX_MARKER}\\n${KITTY_KEYBINDING}\\n?`, "g"), "\n");
+  const cleaned = content
+    .replace(new RegExp(`\\n?${TMUX_MARKER}\\n${KITTY_KEYBINDING}\\n${KITTY_CHAT_KEYBINDING}\\n?`, "g"), "\n")
+    .replace(new RegExp(`\\n?${TMUX_MARKER}\\n${KITTY_KEYBINDING}\\n?`, "g"), "\n");
   writeFileSync(KITTY_CONF, cleaned);
 }
 
@@ -154,6 +162,8 @@ function removeKittyKeybinding(): void {
 const ITERM2_PLIST = join(homedir(), "Library", "Preferences", "com.googlecode.iterm2.plist");
 // CMD+E: char=0x65, modifier=NSCommandKeyMask=0x100000, keycode=kVK_ANSI_E=0xe
 const ITERM2_KEY = "0x65-0x100000-0xe";
+// CMD+S: char=0x73, modifier=NSCommandKeyMask=0x100000, keycode=kVK_ANSI_S=0x1
+const ITERM2_CHAT_KEY = "0x73-0x100000-0x1";
 
 function readIterm2Prefs(): any | null {
   if (!existsSync(ITERM2_PLIST)) return null;
@@ -185,6 +195,7 @@ function addIterm2Keybinding(): boolean {
   try {
     if (!prefs.GlobalKeyMap) prefs.GlobalKeyMap = {};
     prefs.GlobalKeyMap[ITERM2_KEY] = { Action: 11, Text: "e" };
+    prefs.GlobalKeyMap[ITERM2_CHAT_KEY] = { Action: 11, Text: "s" };
     writeIterm2Prefs(prefs);
     return true;
   } catch { return false; }
@@ -192,9 +203,10 @@ function addIterm2Keybinding(): boolean {
 
 function removeIterm2Keybinding(): void {
   const prefs = readIterm2Prefs();
-  if (!prefs?.GlobalKeyMap?.[ITERM2_KEY]) return;
+  if (!prefs?.GlobalKeyMap) return;
   try {
     delete prefs.GlobalKeyMap[ITERM2_KEY];
+    delete prefs.GlobalKeyMap[ITERM2_CHAT_KEY];
     writeIterm2Prefs(prefs);
   } catch {}
 }
@@ -225,6 +237,50 @@ function hasTerminalKeybinding(): boolean {
   return hasGhosttyKeybinding() || hasIterm2Keybinding() || hasKittyKeybinding();
 }
 
+function hasTerminalChatKeybinding(): boolean {
+  const terminal = detectTerminal();
+  switch (terminal) {
+    case "ghostty":
+      return existsSync(GHOSTTY_CONF) && readFileSync(GHOSTTY_CONF, "utf-8").includes(GHOSTTY_CHAT_KEYBINDING);
+    case "kitty":
+      return existsSync(KITTY_CONF) && readFileSync(KITTY_CONF, "utf-8").includes(KITTY_CHAT_KEYBINDING);
+    case "iterm2": {
+      const prefs = readIterm2Prefs();
+      return !!prefs?.GlobalKeyMap?.[ITERM2_CHAT_KEY];
+    }
+    default:
+      return false;
+  }
+}
+
+function addTerminalChatKeybinding(): string {
+  const terminal = detectTerminal();
+  switch (terminal) {
+    case "ghostty": {
+      const existing = existsSync(GHOSTTY_CONF) ? readFileSync(GHOSTTY_CONF, "utf-8") : "";
+      writeFileSync(GHOSTTY_CONF, existing + `\n${GHOSTTY_CHAT_KEYBINDING}\n`);
+      return "Ghostty CMD+S keybinding added. Restart Ghostty to apply.";
+    }
+    case "kitty": {
+      const existing = existsSync(KITTY_CONF) ? readFileSync(KITTY_CONF, "utf-8") : "";
+      writeFileSync(KITTY_CONF, existing + `\n${KITTY_CHAT_KEYBINDING}\n`);
+      return "Kitty CMD+S keybinding added. Restart Kitty to apply.";
+    }
+    case "iterm2": {
+      const prefs = readIterm2Prefs();
+      if (prefs) {
+        if (!prefs.GlobalKeyMap) prefs.GlobalKeyMap = {};
+        prefs.GlobalKeyMap[ITERM2_CHAT_KEY] = { Action: 11, Text: "s" };
+        writeIterm2Prefs(prefs);
+        return "iTerm2 CMD+S keybinding added. Restart iTerm2 to apply.";
+      }
+      return "Could not update iTerm2 automatically.";
+    }
+    default:
+      return "Unknown terminal. Add CMD+S manually to send escape sequence \\x1bs.";
+  }
+}
+
 function removeTerminalKeybinding(): void {
   removeGhosttyKeybinding();
   removeIterm2Keybinding();
@@ -236,16 +292,29 @@ function hasTmuxKeybinding(): boolean {
   return readFileSync(TMUX_CONF_PATH, "utf-8").includes(TMUX_MARKER);
 }
 
+function hasTmuxChatKeybinding(): boolean {
+  if (!existsSync(TMUX_CONF_PATH)) return false;
+  return readFileSync(TMUX_CONF_PATH, "utf-8").includes(TMUX_CHAT_MARKER);
+}
+
+function addTmuxChatKeybinding(): void {
+  const existing = existsSync(TMUX_CONF_PATH) ? readFileSync(TMUX_CONF_PATH, "utf-8") : "";
+  writeFileSync(TMUX_CONF_PATH, existing + `\n${TMUX_CHAT_MARKER}\n${TMUX_CHAT_KEYBINDING_LINE}\n`);
+  try { execSync(`tmux source-file "${TMUX_CONF_PATH}" 2>/dev/null`); } catch {}
+}
+
 function addTmuxKeybinding(): void {
   const existing = existsSync(TMUX_CONF_PATH) ? readFileSync(TMUX_CONF_PATH, "utf-8") : "";
-  writeFileSync(TMUX_CONF_PATH, existing + `\n${TMUX_MARKER}\n${TMUX_KEYBINDING_LINE}\n`);
+  writeFileSync(TMUX_CONF_PATH, existing + `\n${TMUX_MARKER}\n${TMUX_KEYBINDING_LINE}\n${TMUX_CHAT_MARKER}\n${TMUX_CHAT_KEYBINDING_LINE}\n`);
   try { execSync(`tmux source-file "${TMUX_CONF_PATH}" 2>/dev/null`); } catch {}
 }
 
 function removeTmuxKeybinding(): void {
   if (!existsSync(TMUX_CONF_PATH)) return;
   const content = readFileSync(TMUX_CONF_PATH, "utf-8");
-  const cleaned = content.replace(new RegExp(`\\n?${TMUX_MARKER}\\n${TMUX_KEYBINDING_LINE}\\n?`, "g"), "\n");
+  const cleaned = content
+    .replace(new RegExp(`\\n?${TMUX_CHAT_MARKER}\\n${TMUX_CHAT_KEYBINDING_LINE}\\n?`, "g"), "")
+    .replace(new RegExp(`\\n?${TMUX_MARKER}\\n${TMUX_KEYBINDING_LINE}\\n?`, "g"), "\n");
   writeFileSync(TMUX_CONF_PATH, cleaned);
   try { execSync(`tmux source-file "${TMUX_CONF_PATH}" 2>/dev/null`); } catch {}
 }
@@ -299,12 +368,19 @@ export function initHook(): void {
 
   writeSettings(settings);
 
-  if (!hasTmuxKeybinding()) addTmuxKeybinding();
+  if (!hasTmuxKeybinding()) {
+    addTmuxKeybinding();
+  } else if (!hasTmuxChatKeybinding()) {
+    addTmuxChatKeybinding();
+  }
 
   console.log("Latch hooks added to Claude Code.");
 
   if (!hasTerminalKeybinding()) {
     const msg = addTerminalKeybinding();
+    console.log(msg);
+  } else if (!hasTerminalChatKeybinding()) {
+    const msg = addTerminalChatKeybinding();
     console.log(msg);
   }
 }

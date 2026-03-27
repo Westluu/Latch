@@ -73,6 +73,7 @@ process.stdin.on("end", async () => {
         });
       }
     }
+
   } catch {}
   process.exit(0);
 });
