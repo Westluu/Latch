@@ -757,18 +757,25 @@ PAGE_SIZE = 50
 class LoadMoreItem(ListItem):
     DEFAULT_CSS = """
     LoadMoreItem {
-        height: 1;
+        height: 3;
         background: transparent;
         padding: 0;
+        margin: 0 0 1 0;
     }
     LoadMoreItem Static {
         width: 1fr;
         background: transparent;
+        text-align: center;
+        padding: 1 0;
+    }
+    LoadMoreItem.-highlight Static {
+        background: #1F2937;
+        color: #F59E0B;
     }
     """
 
     def __init__(self) -> None:
-        super().__init__(Static("[#6B7280]  ↑ load older messages (enter)[/]"))
+        super().__init__(Static("[#6B7280]─── [bold]↑ load older messages[/bold] (enter) ───[/]"))
 
 
 class TurnSeparatorItem(ListItem):
@@ -1159,6 +1166,12 @@ class ChatApp(App):
             # Update message cursor
             if self._current_message_item is not None:
                 self._current_message_item.set_selected(False)
+            # Update load-more highlight
+            for child in event.list_view.children:
+                if isinstance(child, LoadMoreItem):
+                    child.remove_class("-highlight")
+            if isinstance(event.item, LoadMoreItem):
+                event.item.add_class("-highlight")
             if isinstance(event.item, MessageItem):
                 event.item.set_selected(True)
                 self._current_message_item = event.item
