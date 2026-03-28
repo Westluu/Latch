@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
 
@@ -96,13 +96,67 @@ function hasLatchPlanHook(settings: any): boolean {
 
 // ── terminal detection ───────────────────────────────────────────────────────
 
-type SupportedTerminal = "ghostty" | "iterm2" | "kitty" | "unknown";
+type SupportedTerminal = "ghostty" | "iterm2" | "kitty" | "apple_terminal" | "unknown";
 
 function detectTerminal(): SupportedTerminal {
+  const override = (process.env.LATCH_TERMINAL || "").toLowerCase();
+  if (
+    override === "ghostty" ||
+    override === "iterm2" ||
+    override === "kitty" ||
+    override === "apple_terminal"
+  ) {
+    return override;
+  }
+
+  // Ghostty can be identified by TERM_PROGRAM, but in some launch paths only
+  // Ghostty-specific env vars are present.
   if (process.env.TERM_PROGRAM === "ghostty") return "ghostty";
+  if (process.env.GHOSTTY_BIN_DIR || process.env.GHOSTTY_RESOURCES_DIR) return "ghostty";
+
   if (process.env.TERM_PROGRAM === "iTerm.app" || process.env.ITERM_SESSION_ID) return "iterm2";
+  if (process.env.TERM_PROGRAM === "Apple_Terminal") return "apple_terminal";
+
   if (process.env.KITTY_WINDOW_ID || process.env.TERM === "xterm-kitty") return "kitty";
   return "unknown";
+}
+
+function terminalDebugContext(): string {
+  const termProgram = process.env.TERM_PROGRAM || "<unset>";
+  const term = process.env.TERM || "<unset>";
+  return `TERM_PROGRAM=${termProgram}, TERM=${term}`;
+}
+
+function commandExists(command: string): boolean {
+  const result = spawnSync("sh", ["-lc", `command -v ${command}`], { stdio: "ignore" });
+  return result.status === 0;
+}
+
+function hasTmuxInstalled(): boolean {
+  const result = spawnSync("tmux", ["-V"], { stdio: "ignore" });
+  return result.status === 0;
+}
+
+function installTmuxIfMissing(autoInstallTmux: boolean): void {
+  if (hasTmuxInstalled()) return;
+
+  if (!autoInstallTmux) {
+    console.log("tmux is not installed. Install tmux, then rerun 'latch init'.");
+    return;
+  }
+
+  if (process.platform === "darwin" && commandExists("brew")) {
+    console.log("tmux not found. Installing with Homebrew...");
+    const install = spawnSync("brew", ["install", "tmux"], { stdio: "inherit" });
+    if (install.status === 0 && hasTmuxInstalled()) {
+      console.log("tmux installed successfully.");
+      return;
+    }
+    console.log("Failed to auto-install tmux with Homebrew. Install it manually, then rerun 'latch init'.");
+    return;
+  }
+
+  console.log("tmux is not installed and no supported auto-installer was found. Install tmux manually, then rerun 'latch init'.");
 }
 
 // ── ghostty ──────────────────────────────────────────────────────────────────
@@ -211,6 +265,108 @@ function removeIterm2Keybinding(): void {
   } catch {}
 }
 
+// ── Apple Terminal ───────────────────────────────────────────────────────────
+
+const APPLE_TERMINAL_PLIST = join(homedir(), "Library", "Preferences", "com.apple.Terminal.plist");
+const APPLE_TERMINAL_CMD_E_KEY = "@0065";
+const APPLE_TERMINAL_CMD_S_KEY = "@0073";
+const APPLE_TERMINAL_CMD_E_VALUE = "\\033e";
+const APPLE_TERMINAL_CMD_S_VALUE = "\\033s";
+
+function runPlistBuddy(command: string): string {
+  return execSync(`/usr/libexec/PlistBuddy -c '${command}' "${APPLE_TERMINAL_PLIST}" 2>/dev/null`, {
+    encoding: "utf-8",
+  }).trim();
+}
+
+function appleTerminalTargetProfiles(): string[] {
+  if (!existsSync(APPLE_TERMINAL_PLIST)) return [];
+  const names: string[] = [];
+  try {
+    const defaultProfile = runPlistBuddy('Print :"Default Window Settings"');
+    if (defaultProfile) names.push(defaultProfile);
+  } catch {}
+  try {
+    const startupProfile = runPlistBuddy('Print :"Startup Window Settings"');
+    if (startupProfile) names.push(startupProfile);
+  } catch {}
+  return Array.from(new Set(names));
+}
+
+function ensureAppleTerminalKeybinding(profile: string, key: string, value: string): void {
+  const keyPath = `:"Window Settings":"${profile}":keyMapBoundKeys:${key}`;
+  try {
+    runPlistBuddy(`Print ${keyPath}`);
+    runPlistBuddy(`Set ${keyPath} ${value}`);
+  } catch {
+    try {
+      runPlistBuddy(`Add :"Window Settings":"${profile}":keyMapBoundKeys dict`);
+    } catch {}
+    runPlistBuddy(`Add ${keyPath} string ${value}`);
+  }
+}
+
+function removeAppleTerminalKeybinding(profile: string, key: string): void {
+  const keyPath = `:"Window Settings":"${profile}":keyMapBoundKeys:${key}`;
+  try {
+    runPlistBuddy(`Delete ${keyPath}`);
+  } catch {}
+}
+
+function hasAppleTerminalKeybinding(): boolean {
+  for (const profile of appleTerminalTargetProfiles()) {
+    try {
+      runPlistBuddy(`Print :"Window Settings":"${profile}":keyMapBoundKeys:${APPLE_TERMINAL_CMD_E_KEY}`);
+      return true;
+    } catch {}
+  }
+  return false;
+}
+
+function hasAppleTerminalChatKeybinding(): boolean {
+  for (const profile of appleTerminalTargetProfiles()) {
+    try {
+      runPlistBuddy(`Print :"Window Settings":"${profile}":keyMapBoundKeys:${APPLE_TERMINAL_CMD_S_KEY}`);
+      return true;
+    } catch {}
+  }
+  return false;
+}
+
+function addAppleTerminalKeybindings(): boolean {
+  const profiles = appleTerminalTargetProfiles();
+  if (profiles.length === 0) return false;
+  try {
+    for (const profile of profiles) {
+      ensureAppleTerminalKeybinding(profile, APPLE_TERMINAL_CMD_E_KEY, APPLE_TERMINAL_CMD_E_VALUE);
+      ensureAppleTerminalKeybinding(profile, APPLE_TERMINAL_CMD_S_KEY, APPLE_TERMINAL_CMD_S_VALUE);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function addAppleTerminalChatKeybinding(): boolean {
+  const profiles = appleTerminalTargetProfiles();
+  if (profiles.length === 0) return false;
+  try {
+    for (const profile of profiles) {
+      ensureAppleTerminalKeybinding(profile, APPLE_TERMINAL_CMD_S_KEY, APPLE_TERMINAL_CMD_S_VALUE);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function removeAppleTerminalKeybindings(): void {
+  for (const profile of appleTerminalTargetProfiles()) {
+    removeAppleTerminalKeybinding(profile, APPLE_TERMINAL_CMD_E_KEY);
+    removeAppleTerminalKeybinding(profile, APPLE_TERMINAL_CMD_S_KEY);
+  }
+}
+
 // ── unified terminal keybinding ──────────────────────────────────────────────
 
 function addTerminalKeybinding(): string {
@@ -228,13 +384,31 @@ function addTerminalKeybinding(): string {
     case "kitty":
       addKittyKeybinding();
       return "Kitty config updated. Restart Kitty to apply.";
+    case "apple_terminal": {
+      const ok = addAppleTerminalKeybindings();
+      return ok
+        ? "Apple Terminal key bindings added for startup/default profile. Restart Terminal to apply."
+        : "Apple Terminal detected, but automatic keybinding update failed. Add CMD+E manually in Settings -> Profiles -> Keyboard as 'Send string to shell' with value \\033e.";
+    }
     default:
-      return "Unknown terminal. Add CMD+E manually to send escape sequence \\x1be.";
+      return `Unknown terminal (${terminalDebugContext()}). Add CMD+E manually to send escape sequence \\x1be.`;
   }
 }
 
 function hasTerminalKeybinding(): boolean {
-  return hasGhosttyKeybinding() || hasIterm2Keybinding() || hasKittyKeybinding();
+  const terminal = detectTerminal();
+  switch (terminal) {
+    case "ghostty":
+      return hasGhosttyKeybinding();
+    case "iterm2":
+      return hasIterm2Keybinding();
+    case "kitty":
+      return hasKittyKeybinding();
+    case "apple_terminal":
+      return hasAppleTerminalKeybinding();
+    default:
+      return false;
+  }
 }
 
 function hasTerminalChatKeybinding(): boolean {
@@ -248,6 +422,8 @@ function hasTerminalChatKeybinding(): boolean {
       const prefs = readIterm2Prefs();
       return !!prefs?.GlobalKeyMap?.[ITERM2_CHAT_KEY];
     }
+    case "apple_terminal":
+      return hasAppleTerminalChatKeybinding();
     default:
       return false;
   }
@@ -276,8 +452,14 @@ function addTerminalChatKeybinding(): string {
       }
       return "Could not update iTerm2 automatically.";
     }
+    case "apple_terminal": {
+      const ok = addAppleTerminalChatKeybinding();
+      return ok
+        ? "Apple Terminal CMD+S keybinding added for startup/default profile. Restart Terminal to apply."
+        : "Apple Terminal detected, but automatic keybinding update failed. Add CMD+S manually in Settings -> Profiles -> Keyboard as 'Send string to shell' with value \\033s.";
+    }
     default:
-      return "Unknown terminal. Add CMD+S manually to send escape sequence \\x1bs.";
+      return `Unknown terminal (${terminalDebugContext()}). Add CMD+S manually to send escape sequence \\x1bs.`;
   }
 }
 
@@ -285,6 +467,7 @@ function removeTerminalKeybinding(): void {
   removeGhosttyKeybinding();
   removeIterm2Keybinding();
   removeKittyKeybinding();
+  removeAppleTerminalKeybindings();
 }
 
 function hasTmuxKeybinding(): boolean {
@@ -319,7 +502,10 @@ function removeTmuxKeybinding(): void {
   try { execSync(`tmux source-file "${TMUX_CONF_PATH}" 2>/dev/null`); } catch {}
 }
 
-export function initHook(): void {
+export function initHook(options: { autoInstallTmux?: boolean } = {}): void {
+  const autoInstallTmux = options.autoInstallTmux ?? true;
+  installTmuxIfMissing(autoInstallTmux);
+
   const settings = readSettings();
 
   if (hasLatchHook(settings)) {
