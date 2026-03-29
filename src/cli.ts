@@ -19,7 +19,8 @@ Usage:
   latch open <file>  Open a file in the Latch preview
   latch toggle       Focus sidecar if open, or open it if closed
   latch chat         Open conversation viewer as a floating popup
-  latch init         Add Claude Code hooks and tmux keybinding (CMD+E)
+  latch init         Add Claude Code hooks and tmux keybinding (CMD+E); installs tmux if missing
+    --no-install-tmux  Skip automatic tmux installation during init
   latch remove       Remove the Claude Code hooks and tmux keybinding
   latch --help       Show this help message
   latch --version    Show version
@@ -43,7 +44,8 @@ if (command && command in AGENTS) {
 }
 
 if (command === "init") {
-  initHook();
+  const autoInstallTmux = !args.includes("--no-install-tmux");
+  initHook({ autoInstallTmux });
   process.exit(0);
 }
 
