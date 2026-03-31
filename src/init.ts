@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from "
 import { execSync, spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
+import { getPythonUiDependencyError } from "./tmux.js";
 
 const SETTINGS_PATH = join(homedir(), ".claude", "settings.json");
 const HOOK_MARKER = "latch-hook";
@@ -157,6 +158,34 @@ function installTmuxIfMissing(autoInstallTmux: boolean): void {
   }
 
   console.log("tmux is not installed and no supported auto-installer was found. Install tmux manually, then rerun 'latch init'.");
+}
+
+function pythonRequirementsPath(): string {
+  return resolve(import.meta.dirname, "..", "python", "requirements.txt");
+}
+
+function installPythonUiDependenciesIfMissing(autoInstallPythonDeps: boolean): void {
+  const pythonDependencyError = getPythonUiDependencyError();
+  if (!pythonDependencyError) return;
+
+  const installCmd = `python3 -m pip install -r "${pythonRequirementsPath()}"`;
+
+  if (!autoInstallPythonDeps) {
+    console.log(pythonDependencyError);
+    return;
+  }
+
+  console.log("Installing Latch Python dependencies...");
+  const install = spawnSync("python3", ["-m", "pip", "install", "-r", pythonRequirementsPath()], {
+    stdio: "inherit",
+  });
+
+  if (install.status === 0 && !getPythonUiDependencyError()) {
+    console.log("Latch Python dependencies installed successfully.");
+    return;
+  }
+
+  console.log(`Failed to install Latch Python dependencies automatically. Run \`${installCmd}\` and try again.`);
 }
 
 // ── ghostty ──────────────────────────────────────────────────────────────────
@@ -502,9 +531,11 @@ function removeTmuxKeybinding(): void {
   try { execSync(`tmux source-file "${TMUX_CONF_PATH}" 2>/dev/null`); } catch {}
 }
 
-export function initHook(options: { autoInstallTmux?: boolean } = {}): void {
+export function initHook(options: { autoInstallTmux?: boolean; autoInstallPythonDeps?: boolean } = {}): void {
   const autoInstallTmux = options.autoInstallTmux ?? true;
+  const autoInstallPythonDeps = options.autoInstallPythonDeps ?? true;
   installTmuxIfMissing(autoInstallTmux);
+  installPythonUiDependenciesIfMissing(autoInstallPythonDeps);
 
   const settings = readSettings();
 
