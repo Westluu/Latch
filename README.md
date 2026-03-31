@@ -8,4 +8,4 @@ Side Panels + Session Search + Session Resume + Reverts
 
 (buliding ...)
 
-Projects coming soon
+Projects/Workspaces coming soon
