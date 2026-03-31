@@ -3,6 +3,7 @@
 import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSession, launchWithAgent, saveSidecarPaneId, focusOrOpenSidecar, openChatPopup } from "./tmux.js";
 import { sendSidecarMessage } from "./ipc.js";
 import { initHook, removeHook } from "./init.js";
+import { addCurrentProject, addProject, getProject, listProjects, markProjectOpened, removeProject } from "./projects.js";
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -10,21 +11,149 @@ import { homedir } from "node:os";
 const args = process.argv.slice(2);
 const command = args[0];
 
-if (args.includes("--help") || args.includes("-h")) {
+function printHelp(): void {
   console.log(`
 latch — terminal sidecar for agent-driven CLI workflows
 
 Usage:
-  latch claude       Launch Claude Code in a tmux session with Latch
-  latch open <file>  Open a file in the Latch preview
-  latch toggle       Focus sidecar if open, or open it if closed
-  latch chat         Open conversation viewer as a floating popup
-  latch init         Add Claude Code hooks and tmux keybinding (CMD+E); installs tmux if missing
-    --no-install-tmux  Skip automatic tmux installation during init
-  latch remove       Remove the Claude Code hooks and tmux keybinding
-  latch --help       Show this help message
-  latch --version    Show version
+  latch claude               Launch Claude Code in a tmux session with Latch
+  latch <project>            Launch Claude Code for a saved project
+  latch project add --current <name>
+  latch project add <path> <name>
+  latch project open <name>
+  latch project list
+  latch project remove <name>
+  latch open <file>          Open a file in the Latch preview
+  latch toggle               Focus sidecar if open, or open it if closed
+  latch chat                 Open conversation viewer as a floating popup
+  latch init                 Add Claude Code hooks and tmux keybinding (CMD+E); installs tmux if missing
+    --no-install-tmux        Skip automatic tmux installation during init
+  latch remove               Remove the Claude Code hooks and tmux keybinding
+  latch --help               Show this help message
+  latch --version            Show version
 `);
+}
+
+function exitWithError(error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(message);
+  process.exit(1);
+}
+
+function openSavedProject(alias: string): never {
+  try {
+    const project = getProject(alias);
+    if (!project) {
+      console.error(`Unknown project alias "${alias}".`);
+      process.exit(1);
+    }
+
+    markProjectOpened(alias);
+    launchWithAgent(project.path, "claude");
+  } catch (error: unknown) {
+    exitWithError(error);
+  }
+}
+
+function printProjectList(): void {
+  const projects = listProjects();
+  if (projects.length === 0) {
+    console.log("No saved projects yet.");
+    console.log("Add one with: latch project add --current <name>");
+    return;
+  }
+
+  console.log("Projects");
+  console.log("");
+  for (const { alias, project } of projects) {
+    console.log(`${alias.padEnd(16)} ${project.path}`);
+  }
+}
+
+function handleProjectCommand(projectArgs: string[]): void {
+  const subcommand = projectArgs[0];
+
+  if (!subcommand || subcommand === "--help" || subcommand === "-h") {
+    console.log(`
+Usage:
+  latch project add --current <name>
+  latch project add <path> <name>
+  latch project open <name>
+  latch project list
+  latch project remove <name>
+`);
+    process.exit(0);
+  }
+
+  if (subcommand === "list") {
+    printProjectList();
+    process.exit(0);
+  }
+
+  if (subcommand === "add") {
+    if (projectArgs[1] === "--current") {
+      const alias = projectArgs[2];
+      if (!alias || projectArgs[3]) {
+        console.error("Usage: latch project add --current <name>");
+        process.exit(1);
+      }
+
+      try {
+        const project = addCurrentProject(alias);
+        console.log(`Saved project "${alias}" -> ${project.path}`);
+      } catch (error: unknown) {
+        exitWithError(error);
+      }
+      process.exit(0);
+    }
+
+    const inputPath = projectArgs[1];
+    const alias = projectArgs[2];
+    if (!inputPath || !alias || projectArgs[3]) {
+      console.error("Usage: latch project add <path> <name>");
+      process.exit(1);
+    }
+
+    try {
+      const project = addProject(alias, inputPath);
+      console.log(`Saved project "${alias}" -> ${project.path}`);
+    } catch (error: unknown) {
+      exitWithError(error);
+    }
+    process.exit(0);
+  }
+
+  if (subcommand === "open") {
+    const alias = projectArgs[1];
+    if (!alias || projectArgs[2]) {
+      console.error("Usage: latch project open <name>");
+      process.exit(1);
+    }
+    openSavedProject(alias);
+  }
+
+  if (subcommand === "remove") {
+    const alias = projectArgs[1];
+    if (!alias || projectArgs[2]) {
+      console.error("Usage: latch project remove <name>");
+      process.exit(1);
+    }
+
+    try {
+      removeProject(alias);
+      console.log(`Removed project "${alias}".`);
+    } catch (error: unknown) {
+      exitWithError(error);
+    }
+    process.exit(0);
+  }
+
+  console.error(`Unknown project command "${subcommand}".`);
+  process.exit(1);
+}
+
+if (args.includes("--help") || args.includes("-h")) {
+  printHelp();
   process.exit(0);
 }
 
@@ -41,6 +170,10 @@ if (command && command in AGENTS) {
   const cwd = process.cwd();
   launchWithAgent(cwd, AGENTS[command]);
   // launchWithAgent handles process exit internally
+}
+
+if (command === "project") {
+  handleProjectCommand(args.slice(1));
 }
 
 if (command === "init") {
@@ -146,6 +279,20 @@ if (command === "open") {
 }
 
 const cwd = process.cwd();
+
+if (command) {
+  try {
+    const project = getProject(command);
+    if (project) {
+      openSavedProject(command);
+    }
+  } catch (error: unknown) {
+    exitWithError(error);
+  }
+
+  console.error(`Unknown command or project "${command}".`);
+  process.exit(1);
+}
 
 if (isInsideTmux()) {
   console.log("Latch: opening pane...");
