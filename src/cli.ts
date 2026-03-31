@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSession, launchWithAgent, saveSidecarPaneId, focusOrOpenSidecar, openChatPopup } from "./tmux.js";
+import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSession, launchWithAgent, saveSidecarPaneId, focusOrOpenSidecar, focusOrOpenWorkspaces, openChatPopup, openProjectsPopup, switchClientToAgentSession } from "./tmux.js";
 import { sendSidecarMessage } from "./ipc.js";
 import { initHook, removeHook } from "./init.js";
 import { addCurrentProject, addProject, getProject, listProjects, markProjectOpened, removeProject } from "./projects.js";
@@ -18,6 +18,8 @@ latch — terminal sidecar for agent-driven CLI workflows
 Usage:
   latch claude               Launch Claude Code in a tmux session with Latch
   latch <project>            Launch Claude Code for a saved project
+  latch projects             Open the projects picker as a popup
+  latch workspaces           Open the workspaces picker in a left pane
   latch project add --current <name>
   latch project add <path> <name>
   latch project open <name>
@@ -26,7 +28,7 @@ Usage:
   latch open <file>          Open a file in the Latch preview
   latch toggle               Focus sidecar if open, or open it if closed
   latch chat                 Open conversation viewer as a floating popup
-  latch init                 Add Claude Code hooks and tmux keybinding (CMD+E); installs tmux if missing
+  latch init                 Add Claude Code hooks and tmux keybindings (CMD+E, CMD+P, CMD+S); installs tmux if missing
     --no-install-tmux        Skip automatic tmux installation during init
   latch remove               Remove the Claude Code hooks and tmux keybinding
   latch --help               Show this help message
@@ -40,7 +42,7 @@ function exitWithError(error: unknown): never {
   process.exit(1);
 }
 
-function openSavedProject(alias: string): never {
+function openSavedProject(alias: string, options?: { popup?: boolean }): never {
   try {
     const project = getProject(alias);
     if (!project) {
@@ -49,6 +51,9 @@ function openSavedProject(alias: string): never {
     }
 
     markProjectOpened(alias);
+    if (options?.popup) {
+      switchClientToAgentSession(project.path, "claude");
+    }
     launchWithAgent(project.path, "claude");
   } catch (error: unknown) {
     exitWithError(error);
@@ -125,11 +130,13 @@ Usage:
 
   if (subcommand === "open") {
     const alias = projectArgs[1];
-    if (!alias || projectArgs[2]) {
+    const popup = projectArgs.includes("--popup");
+    const extraArgs = projectArgs.slice(2).filter((arg) => arg !== "--popup");
+    if (!alias || extraArgs.length > 0) {
       console.error("Usage: latch project open <name>");
       process.exit(1);
     }
-    openSavedProject(alias);
+    openSavedProject(alias, { popup });
   }
 
   if (subcommand === "remove") {
@@ -215,6 +222,36 @@ if (command === "chat") {
     openChatPopup(cwd, sessionId);
   } catch (e: unknown) {
     console.error("latch chat: failed to open popup:", (e as Error).message);
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
+if (command === "projects") {
+  const cwd = process.cwd();
+  if (!isInsideTmux()) {
+    console.error("latch projects: must be run inside a tmux session.");
+    process.exit(1);
+  }
+  try {
+    openProjectsPopup(cwd);
+  } catch (e: unknown) {
+    console.error("latch projects: failed to open popup:", (e as Error).message);
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
+if (command === "workspaces") {
+  const cwd = process.cwd();
+  if (!isInsideTmux()) {
+    console.error("latch workspaces: must be run inside a tmux session.");
+    process.exit(1);
+  }
+  try {
+    focusOrOpenWorkspaces(cwd);
+  } catch (e: unknown) {
+    console.error("latch workspaces: failed to open pane:", (e as Error).message);
     process.exit(1);
   }
   process.exit(0);

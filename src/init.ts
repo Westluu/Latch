@@ -8,8 +8,10 @@ const HOOK_MARKER = "latch-hook";
 
 const TMUX_CONF_PATH = join(homedir(), ".tmux.conf");
 const TMUX_MARKER = "# latch-keybinding";
+const TMUX_WORKSPACES_MARKER = "# latch-workspaces-keybinding";
 // CMD+E in iTerm2 sends ESC+e (M-e) when configured to send escape sequence "e"
 const TMUX_KEYBINDING_LINE = `bind-key -n M-e run-shell "latch toggle"`;
+const TMUX_WORKSPACES_KEYBINDING_LINE = `bind-key -n M-p run-shell "latch workspaces"`;
 const TMUX_CHAT_KEYBINDING_LINE = `bind-key -n M-s run-shell "latch chat"`;
 const TMUX_CHAT_MARKER = "# latch-chat-keybinding";
 
@@ -163,6 +165,7 @@ function installTmuxIfMissing(autoInstallTmux: boolean): void {
 
 const GHOSTTY_CONF = join(homedir(), ".config", "ghostty", "config");
 const GHOSTTY_KEYBINDING = "keybind = cmd+e=text:\\x1be";
+const GHOSTTY_WORKSPACES_KEYBINDING = "keybind = cmd+p=text:\\x1bp";
 const GHOSTTY_CHAT_KEYBINDING = "keybind = cmd+s=text:\\x1bs";
 
 function hasGhosttyKeybinding(): boolean {
@@ -173,14 +176,18 @@ function hasGhosttyKeybinding(): boolean {
 function addGhosttyKeybinding(): void {
   mkdirSync(join(homedir(), ".config", "ghostty"), { recursive: true });
   const existing = existsSync(GHOSTTY_CONF) ? readFileSync(GHOSTTY_CONF, "utf-8") : "";
-  writeFileSync(GHOSTTY_CONF, existing + `\n${TMUX_MARKER}\n${GHOSTTY_KEYBINDING}\n${GHOSTTY_CHAT_KEYBINDING}\n`);
+  writeFileSync(
+    GHOSTTY_CONF,
+    existing + `\n${TMUX_MARKER}\n${GHOSTTY_KEYBINDING}\n${TMUX_WORKSPACES_MARKER}\n${GHOSTTY_WORKSPACES_KEYBINDING}\n${TMUX_CHAT_MARKER}\n${GHOSTTY_CHAT_KEYBINDING}\n`
+  );
 }
 
 function removeGhosttyKeybinding(): void {
   if (!existsSync(GHOSTTY_CONF)) return;
   const content = readFileSync(GHOSTTY_CONF, "utf-8");
   const cleaned = content
-    .replace(new RegExp(`\\n?${TMUX_MARKER}\\n${GHOSTTY_KEYBINDING}\\n${GHOSTTY_CHAT_KEYBINDING}\\n?`, "g"), "\n")
+    .replace(new RegExp(`\\n?${TMUX_CHAT_MARKER}\\n${GHOSTTY_CHAT_KEYBINDING}\\n?`, "g"), "\n")
+    .replace(new RegExp(`\\n?${TMUX_WORKSPACES_MARKER}\\n${GHOSTTY_WORKSPACES_KEYBINDING}\\n?`, "g"), "\n")
     .replace(new RegExp(`\\n?${TMUX_MARKER}\\n${GHOSTTY_KEYBINDING}\\n?`, "g"), "\n");
   writeFileSync(GHOSTTY_CONF, cleaned);
 }
@@ -189,6 +196,7 @@ function removeGhosttyKeybinding(): void {
 
 const KITTY_CONF = join(homedir(), ".config", "kitty", "kitty.conf");
 const KITTY_KEYBINDING = "map cmd+e send_text all \\x1be";
+const KITTY_WORKSPACES_KEYBINDING = "map cmd+p send_text all \\x1bp";
 const KITTY_CHAT_KEYBINDING = "map cmd+s send_text all \\x1bs";
 
 function hasKittyKeybinding(): boolean {
@@ -199,14 +207,18 @@ function hasKittyKeybinding(): boolean {
 function addKittyKeybinding(): void {
   mkdirSync(join(homedir(), ".config", "kitty"), { recursive: true });
   const existing = existsSync(KITTY_CONF) ? readFileSync(KITTY_CONF, "utf-8") : "";
-  writeFileSync(KITTY_CONF, existing + `\n${TMUX_MARKER}\n${KITTY_KEYBINDING}\n${KITTY_CHAT_KEYBINDING}\n`);
+  writeFileSync(
+    KITTY_CONF,
+    existing + `\n${TMUX_MARKER}\n${KITTY_KEYBINDING}\n${TMUX_WORKSPACES_MARKER}\n${KITTY_WORKSPACES_KEYBINDING}\n${TMUX_CHAT_MARKER}\n${KITTY_CHAT_KEYBINDING}\n`
+  );
 }
 
 function removeKittyKeybinding(): void {
   if (!existsSync(KITTY_CONF)) return;
   const content = readFileSync(KITTY_CONF, "utf-8");
   const cleaned = content
-    .replace(new RegExp(`\\n?${TMUX_MARKER}\\n${KITTY_KEYBINDING}\\n${KITTY_CHAT_KEYBINDING}\\n?`, "g"), "\n")
+    .replace(new RegExp(`\\n?${TMUX_CHAT_MARKER}\\n${KITTY_CHAT_KEYBINDING}\\n?`, "g"), "\n")
+    .replace(new RegExp(`\\n?${TMUX_WORKSPACES_MARKER}\\n${KITTY_WORKSPACES_KEYBINDING}\\n?`, "g"), "\n")
     .replace(new RegExp(`\\n?${TMUX_MARKER}\\n${KITTY_KEYBINDING}\\n?`, "g"), "\n");
   writeFileSync(KITTY_CONF, cleaned);
 }
@@ -218,6 +230,8 @@ const ITERM2_PLIST = join(homedir(), "Library", "Preferences", "com.googlecode.i
 const ITERM2_KEY = "0x65-0x100000-0xe";
 // CMD+S: char=0x73, modifier=NSCommandKeyMask=0x100000, keycode=kVK_ANSI_S=0x1
 const ITERM2_CHAT_KEY = "0x73-0x100000-0x1";
+// CMD+P: char=0x70, modifier=NSCommandKeyMask=0x100000, keycode=kVK_ANSI_P=0x23
+const ITERM2_WORKSPACES_KEY = "0x70-0x100000-0x23";
 
 function readIterm2Prefs(): any | null {
   if (!existsSync(ITERM2_PLIST)) return null;
@@ -249,6 +263,7 @@ function addIterm2Keybinding(): boolean {
   try {
     if (!prefs.GlobalKeyMap) prefs.GlobalKeyMap = {};
     prefs.GlobalKeyMap[ITERM2_KEY] = { Action: 11, Text: "e" };
+    prefs.GlobalKeyMap[ITERM2_WORKSPACES_KEY] = { Action: 11, Text: "p" };
     prefs.GlobalKeyMap[ITERM2_CHAT_KEY] = { Action: 11, Text: "s" };
     writeIterm2Prefs(prefs);
     return true;
@@ -260,6 +275,7 @@ function removeIterm2Keybinding(): void {
   if (!prefs?.GlobalKeyMap) return;
   try {
     delete prefs.GlobalKeyMap[ITERM2_KEY];
+    delete prefs.GlobalKeyMap[ITERM2_WORKSPACES_KEY];
     delete prefs.GlobalKeyMap[ITERM2_CHAT_KEY];
     writeIterm2Prefs(prefs);
   } catch {}
@@ -269,8 +285,10 @@ function removeIterm2Keybinding(): void {
 
 const APPLE_TERMINAL_PLIST = join(homedir(), "Library", "Preferences", "com.apple.Terminal.plist");
 const APPLE_TERMINAL_CMD_E_KEY = "@0065";
+const APPLE_TERMINAL_CMD_P_KEY = "@0070";
 const APPLE_TERMINAL_CMD_S_KEY = "@0073";
 const APPLE_TERMINAL_CMD_E_VALUE = "\\033e";
+const APPLE_TERMINAL_CMD_P_VALUE = "\\033p";
 const APPLE_TERMINAL_CMD_S_VALUE = "\\033s";
 
 function runPlistBuddy(command: string): string {
@@ -333,12 +351,23 @@ function hasAppleTerminalChatKeybinding(): boolean {
   return false;
 }
 
+function hasAppleTerminalWorkspacesKeybinding(): boolean {
+  for (const profile of appleTerminalTargetProfiles()) {
+    try {
+      runPlistBuddy(`Print :"Window Settings":"${profile}":keyMapBoundKeys:${APPLE_TERMINAL_CMD_P_KEY}`);
+      return true;
+    } catch {}
+  }
+  return false;
+}
+
 function addAppleTerminalKeybindings(): boolean {
   const profiles = appleTerminalTargetProfiles();
   if (profiles.length === 0) return false;
   try {
     for (const profile of profiles) {
       ensureAppleTerminalKeybinding(profile, APPLE_TERMINAL_CMD_E_KEY, APPLE_TERMINAL_CMD_E_VALUE);
+      ensureAppleTerminalKeybinding(profile, APPLE_TERMINAL_CMD_P_KEY, APPLE_TERMINAL_CMD_P_VALUE);
       ensureAppleTerminalKeybinding(profile, APPLE_TERMINAL_CMD_S_KEY, APPLE_TERMINAL_CMD_S_VALUE);
     }
     return true;
@@ -360,9 +389,23 @@ function addAppleTerminalChatKeybinding(): boolean {
   }
 }
 
+function addAppleTerminalWorkspacesKeybinding(): boolean {
+  const profiles = appleTerminalTargetProfiles();
+  if (profiles.length === 0) return false;
+  try {
+    for (const profile of profiles) {
+      ensureAppleTerminalKeybinding(profile, APPLE_TERMINAL_CMD_P_KEY, APPLE_TERMINAL_CMD_P_VALUE);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function removeAppleTerminalKeybindings(): void {
   for (const profile of appleTerminalTargetProfiles()) {
     removeAppleTerminalKeybinding(profile, APPLE_TERMINAL_CMD_E_KEY);
+    removeAppleTerminalKeybinding(profile, APPLE_TERMINAL_CMD_P_KEY);
     removeAppleTerminalKeybinding(profile, APPLE_TERMINAL_CMD_S_KEY);
   }
 }
@@ -429,6 +472,24 @@ function hasTerminalChatKeybinding(): boolean {
   }
 }
 
+function hasTerminalWorkspacesKeybinding(): boolean {
+  const terminal = detectTerminal();
+  switch (terminal) {
+    case "ghostty":
+      return existsSync(GHOSTTY_CONF) && readFileSync(GHOSTTY_CONF, "utf-8").includes(GHOSTTY_WORKSPACES_KEYBINDING);
+    case "kitty":
+      return existsSync(KITTY_CONF) && readFileSync(KITTY_CONF, "utf-8").includes(KITTY_WORKSPACES_KEYBINDING);
+    case "iterm2": {
+      const prefs = readIterm2Prefs();
+      return !!prefs?.GlobalKeyMap?.[ITERM2_WORKSPACES_KEY];
+    }
+    case "apple_terminal":
+      return hasAppleTerminalWorkspacesKeybinding();
+    default:
+      return false;
+  }
+}
+
 function addTerminalChatKeybinding(): string {
   const terminal = detectTerminal();
   switch (terminal) {
@@ -463,6 +524,40 @@ function addTerminalChatKeybinding(): string {
   }
 }
 
+function addTerminalWorkspacesKeybinding(): string {
+  const terminal = detectTerminal();
+  switch (terminal) {
+    case "ghostty": {
+      const existing = existsSync(GHOSTTY_CONF) ? readFileSync(GHOSTTY_CONF, "utf-8") : "";
+      writeFileSync(GHOSTTY_CONF, existing + `\n${TMUX_WORKSPACES_MARKER}\n${GHOSTTY_WORKSPACES_KEYBINDING}\n`);
+      return "Ghostty CMD+P keybinding added. Restart Ghostty to apply.";
+    }
+    case "kitty": {
+      const existing = existsSync(KITTY_CONF) ? readFileSync(KITTY_CONF, "utf-8") : "";
+      writeFileSync(KITTY_CONF, existing + `\n${TMUX_WORKSPACES_MARKER}\n${KITTY_WORKSPACES_KEYBINDING}\n`);
+      return "Kitty CMD+P keybinding added. Restart Kitty to apply.";
+    }
+    case "iterm2": {
+      const prefs = readIterm2Prefs();
+      if (prefs) {
+        if (!prefs.GlobalKeyMap) prefs.GlobalKeyMap = {};
+        prefs.GlobalKeyMap[ITERM2_WORKSPACES_KEY] = { Action: 11, Text: "p" };
+        writeIterm2Prefs(prefs);
+        return "iTerm2 CMD+P keybinding added. Restart iTerm2 to apply.";
+      }
+      return "Could not update iTerm2 automatically.";
+    }
+    case "apple_terminal": {
+      const ok = addAppleTerminalWorkspacesKeybinding();
+      return ok
+        ? "Apple Terminal CMD+P keybinding added for startup/default profile. Restart Terminal to apply."
+        : "Apple Terminal detected, but automatic keybinding update failed. Add CMD+P manually in Settings -> Profiles -> Keyboard as 'Send string to shell' with value \\033p.";
+    }
+    default:
+      return `Unknown terminal (${terminalDebugContext()}). Add CMD+P manually to send escape sequence \\x1bp.`;
+  }
+}
+
 function removeTerminalKeybinding(): void {
   removeGhosttyKeybinding();
   removeIterm2Keybinding();
@@ -480,15 +575,29 @@ function hasTmuxChatKeybinding(): boolean {
   return readFileSync(TMUX_CONF_PATH, "utf-8").includes(TMUX_CHAT_MARKER);
 }
 
+function hasTmuxWorkspacesKeybinding(): boolean {
+  if (!existsSync(TMUX_CONF_PATH)) return false;
+  return readFileSync(TMUX_CONF_PATH, "utf-8").includes(TMUX_WORKSPACES_MARKER);
+}
+
 function addTmuxChatKeybinding(): void {
   const existing = existsSync(TMUX_CONF_PATH) ? readFileSync(TMUX_CONF_PATH, "utf-8") : "";
   writeFileSync(TMUX_CONF_PATH, existing + `\n${TMUX_CHAT_MARKER}\n${TMUX_CHAT_KEYBINDING_LINE}\n`);
   try { execSync(`tmux source-file "${TMUX_CONF_PATH}" 2>/dev/null`); } catch {}
 }
 
+function addTmuxWorkspacesKeybinding(): void {
+  const existing = existsSync(TMUX_CONF_PATH) ? readFileSync(TMUX_CONF_PATH, "utf-8") : "";
+  writeFileSync(TMUX_CONF_PATH, existing + `\n${TMUX_WORKSPACES_MARKER}\n${TMUX_WORKSPACES_KEYBINDING_LINE}\n`);
+  try { execSync(`tmux source-file "${TMUX_CONF_PATH}" 2>/dev/null`); } catch {}
+}
+
 function addTmuxKeybinding(): void {
   const existing = existsSync(TMUX_CONF_PATH) ? readFileSync(TMUX_CONF_PATH, "utf-8") : "";
-  writeFileSync(TMUX_CONF_PATH, existing + `\n${TMUX_MARKER}\n${TMUX_KEYBINDING_LINE}\n${TMUX_CHAT_MARKER}\n${TMUX_CHAT_KEYBINDING_LINE}\n`);
+  writeFileSync(
+    TMUX_CONF_PATH,
+    existing + `\n${TMUX_MARKER}\n${TMUX_KEYBINDING_LINE}\n${TMUX_WORKSPACES_MARKER}\n${TMUX_WORKSPACES_KEYBINDING_LINE}\n${TMUX_CHAT_MARKER}\n${TMUX_CHAT_KEYBINDING_LINE}\n`
+  );
   try { execSync(`tmux source-file "${TMUX_CONF_PATH}" 2>/dev/null`); } catch {}
 }
 
@@ -497,6 +606,7 @@ function removeTmuxKeybinding(): void {
   const content = readFileSync(TMUX_CONF_PATH, "utf-8");
   const cleaned = content
     .replace(new RegExp(`\\n?${TMUX_CHAT_MARKER}\\n${TMUX_CHAT_KEYBINDING_LINE}\\n?`, "g"), "")
+    .replace(new RegExp(`\\n?${TMUX_WORKSPACES_MARKER}\\n${TMUX_WORKSPACES_KEYBINDING_LINE}\\n?`, "g"), "")
     .replace(new RegExp(`\\n?${TMUX_MARKER}\\n${TMUX_KEYBINDING_LINE}\\n?`, "g"), "\n");
   writeFileSync(TMUX_CONF_PATH, cleaned);
   try { execSync(`tmux source-file "${TMUX_CONF_PATH}" 2>/dev/null`); } catch {}
@@ -507,11 +617,6 @@ export function initHook(options: { autoInstallTmux?: boolean } = {}): void {
   installTmuxIfMissing(autoInstallTmux);
 
   const settings = readSettings();
-
-  if (hasLatchHook(settings)) {
-    console.log("Latch hook is already configured in Claude Code.");
-    return;
-  }
 
   if (!settings.hooks) settings.hooks = {};
 
@@ -556,6 +661,8 @@ export function initHook(options: { autoInstallTmux?: boolean } = {}): void {
 
   if (!hasTmuxKeybinding()) {
     addTmuxKeybinding();
+  } else if (!hasTmuxWorkspacesKeybinding()) {
+    addTmuxWorkspacesKeybinding();
   } else if (!hasTmuxChatKeybinding()) {
     addTmuxChatKeybinding();
   }
@@ -564,6 +671,9 @@ export function initHook(options: { autoInstallTmux?: boolean } = {}): void {
 
   if (!hasTerminalKeybinding()) {
     const msg = addTerminalKeybinding();
+    console.log(msg);
+  } else if (!hasTerminalWorkspacesKeybinding()) {
+    const msg = addTerminalWorkspacesKeybinding();
     console.log(msg);
   } else if (!hasTerminalChatKeybinding()) {
     const msg = addTerminalChatKeybinding();

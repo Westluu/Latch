@@ -116,6 +116,8 @@ test("validateProjectAlias rejects invalid and reserved aliases", () => {
   assert.throws(() => validateProjectAlias(""), /cannot be empty/);
   assert.throws(() => validateProjectAlias("bad alias"), /may only contain/);
   assert.throws(() => validateProjectAlias("chat"), /reserved/);
+  assert.throws(() => validateProjectAlias("projects"), /reserved/);
+  assert.throws(() => validateProjectAlias("workspaces"), /reserved/);
 });
 
 test("addProject normalizes relative paths using cwd", () => {
@@ -303,5 +305,101 @@ test("cli built-in commands win over project shorthand lookup", () => {
 
     assert.equal(result.status, 1);
     assert.match(result.stderr, /latch chat: must be run inside a tmux session/);
+  });
+});
+
+test("cli projects opens the popup through tmux", () => {
+  withTempDir((dir) => {
+    const binDir = join(dir, "bin");
+    mkdirSync(binDir, { recursive: true });
+
+    const tmuxLog = join(dir, "tmux.log");
+    const tmuxStub = join(binDir, "tmux");
+    writeFileSync(
+      tmuxStub,
+      "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$LATCH_TMUX_LOG\"\nif [ \"$1\" = \"display-popup\" ]; then exit 0; fi\nexit 0\n"
+    );
+    chmodSync(tmuxStub, 0o755);
+
+    const env = {
+      ...process.env,
+      TMUX: "1",
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      LATCH_TMUX_LOG: tmuxLog,
+    };
+
+    const result = runCli(["projects"], { env });
+    assert.equal(result.status, 0);
+
+    const logged = readFileSync(tmuxLog, "utf-8");
+    assert.match(logged, /display-popup/);
+    assert.match(logged, /python3/);
+    assert.match(logged, /projects\.py/);
+  });
+});
+
+test("cli workspaces opens the picker in a left tmux pane", () => {
+  withTempDir((dir) => {
+    const binDir = join(dir, "bin");
+    const tmpRoot = join(dir, "tmp");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(tmpRoot, { recursive: true });
+
+    const tmuxLog = join(dir, "tmux.log");
+    const tmuxStub = join(binDir, "tmux");
+    writeFileSync(
+      tmuxStub,
+      "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$LATCH_TMUX_LOG\"\nif [ \"$1\" = \"split-window\" ]; then printf '%s\\n' '%42'; fi\nexit 0\n"
+    );
+    chmodSync(tmuxStub, 0o755);
+
+    const env = {
+      ...process.env,
+      TMUX: "1",
+      TMPDIR: tmpRoot,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      LATCH_TMUX_LOG: tmuxLog,
+    };
+
+    const result = runCli(["workspaces"], { env });
+    assert.equal(result.status, 0);
+
+    const logged = readFileSync(tmuxLog, "utf-8");
+    assert.match(logged, /split-window -h -b -l 30%/);
+    assert.match(logged, /projects\.py/);
+  });
+});
+
+test("cli project open --popup switches the client to a new tmux session", () => {
+  withTempDir((dir) => {
+    const configHome = join(dir, "config");
+    const binDir = join(dir, "bin");
+    mkdirSync(binDir, { recursive: true });
+
+    const tmuxLog = join(dir, "tmux.log");
+    const tmuxStub = join(binDir, "tmux");
+    writeFileSync(
+      tmuxStub,
+      "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$LATCH_TMUX_LOG\"\nexit 0\n"
+    );
+    chmodSync(tmuxStub, 0o755);
+
+    const projectPath = projectFixturePath(dir, "frontend");
+    addProject("frontend", projectPath, { configPath: configPathFor(configHome) });
+
+    const env = {
+      ...process.env,
+      TMUX: "1",
+      XDG_CONFIG_HOME: configHome,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      LATCH_TMUX_LOG: tmuxLog,
+    };
+
+    const result = runCli(["project", "open", "frontend", "--popup"], { env });
+    assert.equal(result.status, 0);
+
+    const logged = readFileSync(tmuxLog, "utf-8");
+    assert.match(logged, /new-session -d -s latch-/);
+    assert.match(logged, /switch-client -t latch-/);
   });
 });

@@ -37,6 +37,8 @@ export const RESERVED_PROJECT_ALIASES = new Set([
   "open",
   "toggle",
   "chat",
+  "projects",
+  "workspaces",
   "tray",
   "init",
   "remove",

@@ -12,12 +12,29 @@ function sidecarPanePath(cwd: string, sessionId: string = ""): string {
   return join(dir, `${hash}-sidecar-pane.txt`);
 }
 
+function workspacesPanePath(cwd: string): string {
+  const hash = createHash("sha256").update(`${cwd}:workspaces`).digest("hex").slice(0, 12);
+  const dir = join(tmpdir(), "latch");
+  mkdirSync(dir, { recursive: true });
+  return join(dir, `${hash}-workspaces-pane.txt`);
+}
+
 export function saveSidecarPaneId(cwd: string, sessionId: string, paneId: string): void {
   writeFileSync(sidecarPanePath(cwd, sessionId), paneId);
 }
 
 export function getSidecarPaneId(cwd: string, sessionId: string = ""): string | null {
   const p = sidecarPanePath(cwd, sessionId);
+  if (!existsSync(p)) return null;
+  return readFileSync(p, "utf-8").trim() || null;
+}
+
+export function saveWorkspacesPaneId(cwd: string, paneId: string): void {
+  writeFileSync(workspacesPanePath(cwd), paneId);
+}
+
+export function getWorkspacesPaneId(cwd: string): string | null {
+  const p = workspacesPanePath(cwd);
   if (!existsSync(p)) return null;
   return readFileSync(p, "utf-8").trim() || null;
 }
@@ -122,6 +139,18 @@ export function launchWithAgent(cwd: string, agentCommand: string): never {
   }
 }
 
+export function switchClientToAgentSession(cwd: string, agentCommand: string): never {
+  if (!isInsideTmux()) {
+    launchWithAgent(cwd, agentCommand);
+  }
+
+  const sessionName = uniqueSessionName();
+  const loadingPy = join(__dirname, "..", "python", "loading.py");
+  run(`tmux new-session -d -s ${sessionName} -c '${cwd}' 'python3 "${loadingPy}" "${agentCommand}"'`);
+  run(`tmux switch-client -t ${sessionName}`);
+  process.exit(0);
+}
+
 // ── tray pane tracking ──────────────────────────────────────────────────────
 
 function trayPanePath(cwd: string, sessionId: string = ""): string {
@@ -174,6 +203,39 @@ export function openChatPopup(cwd: string, sessionId: string): void {
   run(
     `tmux display-popup -w 90% -h 90% -E '${chatCommand(cwd, sessionId, claudePane)}'`
   );
+}
+
+function projectsCommand(cwd: string): string {
+  const pythonProjects = join(__dirname, "..", "python", "projects.py");
+  return `python3 "${pythonProjects}" "${cwd}"`;
+}
+
+export function openProjectsPopup(cwd: string): void {
+  run(
+    `tmux display-popup -w 75% -h 65% -E '${projectsCommand(cwd)}'`
+  );
+}
+
+export function splitAndLaunchWorkspaces(cwd: string): string {
+  return run(
+    `tmux split-window -h -b -l 30% -P -F '#{pane_id}' -c '${cwd}' '${projectsCommand(cwd)}'`
+  );
+}
+
+export function focusOrOpenWorkspaces(cwd: string): void {
+  const paneId = getWorkspacesPaneId(cwd);
+  if (paneId) {
+    try {
+      run(`tmux display-message -t ${paneId} -p ''`);
+      run(`tmux select-pane -t ${paneId}`);
+      return;
+    } catch {
+      try { unlinkSync(workspacesPanePath(cwd)); } catch {}
+    }
+  }
+
+  const newPaneId = splitAndLaunchWorkspaces(cwd);
+  saveWorkspacesPaneId(cwd, newPaneId);
 }
 
 // ── session cleanup ─────────────────────────────────────────────────────────
