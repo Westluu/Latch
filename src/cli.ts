@@ -15,6 +15,7 @@ if (args.includes("--help") || args.includes("-h")) {
 latch — terminal sidecar for agent-driven CLI workflows
 
 Usage:
+<<<<<<< ours
   latch claude       Launch Claude Code in a tmux session with Latch
   latch open <file>  Open a file in the Latch preview
   latch toggle       Focus sidecar if open, or open it if closed
@@ -24,6 +25,23 @@ Usage:
   latch remove       Remove the Claude Code hooks and tmux keybinding
   latch --help       Show this help message
   latch --version    Show version
+=======
+  latch claude               Launch Claude Code in a tmux session with Latch
+  latch <project>            Launch Claude Code for a saved project
+  latch project add --current <name>
+  latch project add <path> <name>
+  latch project open <name>
+  latch project list
+  latch project remove <name>
+  latch open <file>          Open a file in the Latch preview
+  latch toggle               Focus sidecar if open, or open it if closed
+  latch chat                 Open conversation viewer as a floating popup
+  latch init                 Add Claude Code hooks and tmux keybinding (CMD+E); installs tmux if missing
+    --no-install-tmux        Skip automatic tmux installation during init
+  latch remove               Remove the Claude Code hooks and tmux keybinding
+  latch --help               Show this help message
+  latch --version            Show version
+>>>>>>> theirs
 `);
   process.exit(0);
 }
@@ -45,7 +63,8 @@ if (command && command in AGENTS) {
 
 if (command === "init") {
   const autoInstallTmux = !args.includes("--no-install-tmux");
-  initHook({ autoInstallTmux });
+  const autoInstallPythonDeps = !args.includes("--no-install-python-deps");
+  initHook({ autoInstallTmux, autoInstallPythonDeps });
   process.exit(0);
 }
 

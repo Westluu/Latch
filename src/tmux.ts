@@ -24,6 +24,32 @@ export function getSidecarPaneId(cwd: string, sessionId: string = ""): string | 
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+function pythonRequirementsPath(): string {
+  return join(__dirname, "..", "python", "requirements.txt");
+}
+
+export function getPythonUiDependencyError(): string | null {
+  const check = spawnSync("python3", ["-c", "import rich, textual"], {
+    encoding: "utf-8",
+  });
+
+  if (!check.error && check.status === 0) return null;
+
+  const installCmd = `python3 -m pip install -r "${pythonRequirementsPath()}"`;
+
+  if (check.error) {
+    return `Latch requires python3 plus Python UI dependencies. Install them with: ${installCmd}`;
+  }
+
+  const detail = `${check.stderr || check.stdout}`.trim().split("\n").pop()?.trim();
+  return `Latch requires Python UI dependencies${detail ? ` (${detail})` : ""}. Install them with: ${installCmd}`;
+}
+
+function ensurePythonUiDependencies(): void {
+  const error = getPythonUiDependencyError();
+  if (error) throw new Error(error);
+}
+
 export function isInsideTmux(): boolean {
   return !!process.env.TMUX;
 }
@@ -63,6 +89,7 @@ function trayCommand(cwd: string, sessionId: string): string {
 }
 
 export function splitAndLaunchTray(cwd: string, sessionId: string = ""): string {
+  ensurePythonUiDependencies();
   const paneId = run(
     `tmux split-window -v -l 10 -P -F '#{pane_id}' -c '${cwd}' '${trayCommand(cwd, sessionId)}'`
   );
@@ -76,6 +103,7 @@ function sidecarCommand(cwd: string, sessionId: string = ""): string {
 }
 
 export function splitAndLaunchSidecar(cwd: string, sessionId: string = ""): string {
+  ensurePythonUiDependencies();
   const paneId = run(
     `tmux split-window -h -l 40% -P -F '#{pane_id}' -c '${cwd}' '${sidecarCommand(cwd, sessionId)}'`
   );
@@ -84,6 +112,7 @@ export function splitAndLaunchSidecar(cwd: string, sessionId: string = ""): stri
 }
 
 export function launchNewSession(cwd: string, sessionId: string = ""): void {
+  ensurePythonUiDependencies();
   const sessionName = "latch";
   run(`tmux new-session -d -s ${sessionName} -c '${cwd}'`);
   run(
@@ -169,6 +198,7 @@ function chatCommand(cwd: string, sessionId: string, claudePane: string): string
 }
 
 export function openChatPopup(cwd: string, sessionId: string): void {
+  ensurePythonUiDependencies();
   // Capture the active pane ID so chat.py can send /resume commands to it
   const claudePane = run(`tmux display-message -p '#{pane_id}'`);
   run(
