@@ -203,7 +203,8 @@ if (command === "project") {
 
 if (command === "init") {
   const autoInstallTmux = !args.includes("--no-install-tmux");
-  initHook({ autoInstallTmux });
+  const autoInstallPythonDeps = !args.includes("--no-install-python-deps");
+  initHook({ autoInstallTmux, autoInstallPythonDeps });
   process.exit(0);
 }
 
