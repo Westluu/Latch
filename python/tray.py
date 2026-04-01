@@ -9,17 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import atexit
-import hashlib
-import json
 import os
 import signal
 import shutil
 import sys
-import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
 
+from latch.ipc import build_socket_path, cleanup_socket, send_json_message, start_ipc_server
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -27,67 +24,10 @@ from textual.containers import Horizontal
 from textual.widgets import Footer, Header, Static
 
 
-# ── IPC helpers ───────────────────────────────────────────────────────────────
-
-def get_socket_dir() -> str:
-    base = os.environ.get("XDG_RUNTIME_DIR", tempfile.gettempdir())
-    d = os.path.join(base, "latch")
-    os.makedirs(d, exist_ok=True)
-    return d
-
-
-def get_sidecar_socket_path(cwd: str, session_id: str = "") -> str:
-    h = hashlib.sha256((cwd + session_id).encode()).hexdigest()[:12]
-    return os.path.join(get_socket_dir(), f"{h}-sidecar.sock")
-
-
-def get_tray_socket_path(cwd: str, session_id: str) -> str:
-    h = hashlib.sha256((cwd + session_id).encode()).hexdigest()[:12]
-    return os.path.join(get_socket_dir(), f"{h}-tray.sock")
-
-
 async def send_to_sidecar(cwd: str, session_id: str, msg: dict) -> None:
     """Send a message to the sidecar's IPC socket."""
-    sock_path = get_sidecar_socket_path(cwd, session_id)
-    if not os.path.exists(sock_path):
-        return
-    try:
-        reader, writer = await asyncio.open_unix_connection(sock_path)
-        writer.write((json.dumps(msg) + "\n").encode())
-        await writer.drain()
-        await reader.read(64)
-        writer.close()
-    except Exception:
-        pass
-
-
-async def start_ipc_server(socket_path: str, on_message):
-    if os.path.exists(socket_path):
-        os.unlink(socket_path)
-
-    async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        buffer = ""
-        while True:
-            data = await reader.read(4096)
-            if not data:
-                break
-            buffer += data.decode()
-            while "\n" in buffer:
-                line, buffer = buffer.split("\n", 1)
-                line = line.strip()
-                if line:
-                    try:
-                        msg = json.loads(line)
-                        await on_message(msg)
-                        writer.write(b"ok\n")
-                        await writer.drain()
-                    except json.JSONDecodeError:
-                        writer.write(b"error: invalid json\n")
-                        await writer.drain()
-        writer.close()
-
-    server = await asyncio.start_unix_server(handle_client, path=socket_path)
-    return server
+    sock_path = build_socket_path(cwd, "sidecar", session_id)
+    await send_json_message(sock_path, msg)
 
 
 # ── Data model ────────────────────────────────────────────────────────────────
@@ -279,7 +219,7 @@ class TrayApp(App):
         self._turns: list[TurnData] = []
         self._selected_index: int = 0
         self._ipc_server = None
-        self._socket_path = get_tray_socket_path(cwd, session_id)
+        self._socket_path = build_socket_path(cwd, "tray", session_id)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -385,18 +325,11 @@ if __name__ == "__main__":
         print(f"Error: {cwd!r} is not a directory", file=sys.stderr)
         sys.exit(1)
 
-    socket_path = get_tray_socket_path(cwd, session_id)
+    socket_path = build_socket_path(cwd, "tray", session_id)
 
-    def cleanup_socket():
-        try:
-            if os.path.exists(socket_path):
-                os.unlink(socket_path)
-        except OSError:
-            pass
-
-    atexit.register(cleanup_socket)
-    signal.signal(signal.SIGHUP, lambda *_: (cleanup_socket(), sys.exit(0)))
-    signal.signal(signal.SIGTERM, lambda *_: (cleanup_socket(), sys.exit(0)))
+    atexit.register(cleanup_socket, socket_path)
+    signal.signal(signal.SIGHUP, lambda *_: (cleanup_socket(socket_path), sys.exit(0)))
+    signal.signal(signal.SIGTERM, lambda *_: (cleanup_socket(socket_path), sys.exit(0)))
 
     app = TrayApp(cwd, session_id)
     app.run()

@@ -9,65 +9,19 @@ from __future__ import annotations
 
 import asyncio
 import atexit
-import glob
-import hashlib
-import json
 import os
 import signal
 import subprocess
 import sys
-import tempfile
 from typing import Optional
 
-from claude_paths import find_transcript_path
+from latch.ipc import build_socket_path, cleanup_socket, start_ipc_server
+from latch.session_store import get_session_plan_path, read_plan
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Footer, Header, ListItem, ListView, Markdown, Static
-
-# ── IPC helpers ──────────────────────────────────────────────────────────────
-
-
-def get_socket_dir() -> str:
-    base = os.environ.get("XDG_RUNTIME_DIR", tempfile.gettempdir())
-    d = os.path.join(base, "latch")
-    os.makedirs(d, exist_ok=True)
-    return d
-
-
-def get_socket_path(cwd: str, session_id: str = "") -> str:
-    h = hashlib.sha256((cwd + session_id).encode()).hexdigest()[:12]
-    return os.path.join(get_socket_dir(), f"{h}-sidecar.sock")
-
-
-async def start_ipc_server(socket_path: str, on_message):
-    if os.path.exists(socket_path):
-        os.unlink(socket_path)
-
-    async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        buffer = ""
-        while True:
-            data = await reader.read(4096)
-            if not data:
-                break
-            buffer += data.decode()
-            while "\n" in buffer:
-                line, buffer = buffer.split("\n", 1)
-                line = line.strip()
-                if line:
-                    try:
-                        msg = json.loads(line)
-                        await on_message(msg)
-                        writer.write(b"ok\n")
-                        await writer.drain()
-                    except json.JSONDecodeError:
-                        writer.write(b"error: invalid json\n")
-                        await writer.drain()
-        writer.close()
-
-    server = await asyncio.start_unix_server(handle_client, path=socket_path)
-    return server
 
 
 # ── Git helpers ───────────────────────────────────────────────────────────────
@@ -153,48 +107,6 @@ def render_diff(diff_text: str) -> Text:
         else:
             text.append(line + "\n", style="#6B7280")
     return text
-
-
-# ── Plans helpers ─────────────────────────────────────────────────────────────
-
-PLANS_DIR = os.path.join(os.path.expanduser("~"), ".claude", "plans")
-
-
-def get_session_plan_path(cwd: str, session_id: str) -> Optional[str]:
-    """
-    Derive the plan file for this specific session by reading the slug from
-    the session transcript. Returns the plan path if the file exists, else None.
-    """
-    if not session_id:
-        return None
-    transcript = find_transcript_path(cwd, session_id)
-    if not transcript:
-        return None
-    try:
-        with open(transcript) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                    slug = obj.get("slug")
-                    if slug:
-                        plan_path = os.path.join(PLANS_DIR, f"{slug}.md")
-                        return plan_path  # return even if file doesn't exist yet
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    return None
-
-
-def read_plan(plan_path: str) -> str:
-    try:
-        with open(plan_path) as f:
-            return f.read()
-    except Exception:
-        return "*Could not read plan file.*"
 
 
 # ── Custom ListItem widgets ───────────────────────────────────────────────────
@@ -348,7 +260,7 @@ class SidecarApp(App):
         # Derive session plan path upfront (may not exist yet)
         self._session_plan_path: Optional[str] = get_session_plan_path(cwd, session_id)
         self._ipc_server = None
-        self._socket_path = get_socket_path(cwd, session_id)
+        self._socket_path = build_socket_path(cwd, "sidecar", session_id)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -531,18 +443,11 @@ if __name__ == "__main__":
         print(f"Error: {cwd!r} is not a directory", file=sys.stderr)
         sys.exit(1)
 
-    socket_path = get_socket_path(cwd, session_id)
+    socket_path = build_socket_path(cwd, "sidecar", session_id)
 
-    def cleanup_socket():
-        try:
-            if os.path.exists(socket_path):
-                os.unlink(socket_path)
-        except OSError:
-            pass
-
-    atexit.register(cleanup_socket)
-    signal.signal(signal.SIGHUP, lambda *_: (cleanup_socket(), sys.exit(0)))
-    signal.signal(signal.SIGTERM, lambda *_: (cleanup_socket(), sys.exit(0)))
+    atexit.register(cleanup_socket, socket_path)
+    signal.signal(signal.SIGHUP, lambda *_: (cleanup_socket(socket_path), sys.exit(0)))
+    signal.signal(signal.SIGTERM, lambda *_: (cleanup_socket(socket_path), sys.exit(0)))
 
     app = SidecarApp(cwd, session_id)
     app.run()
