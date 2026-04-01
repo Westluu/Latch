@@ -19,6 +19,7 @@ import sys
 import tempfile
 from typing import Optional
 
+from claude_paths import find_transcript_path
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -157,7 +158,6 @@ def render_diff(diff_text: str) -> Text:
 # ── Plans helpers ─────────────────────────────────────────────────────────────
 
 PLANS_DIR = os.path.join(os.path.expanduser("~"), ".claude", "plans")
-CLAUDE_DIR = os.path.join(os.path.expanduser("~"), ".claude")
 
 
 def get_session_plan_path(cwd: str, session_id: str) -> Optional[str]:
@@ -167,11 +167,8 @@ def get_session_plan_path(cwd: str, session_id: str) -> Optional[str]:
     """
     if not session_id:
         return None
-    project_dir = cwd.replace("/", "-")
-    transcript = os.path.join(
-        CLAUDE_DIR, "projects", project_dir, f"{session_id}.jsonl"
-    )
-    if not os.path.exists(transcript):
+    transcript = find_transcript_path(cwd, session_id)
+    if not transcript:
         return None
     try:
         with open(transcript) as f:

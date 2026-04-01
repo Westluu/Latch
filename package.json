@@ -12,7 +12,8 @@
     "bundle": "node scripts/bundle.mjs",
     "dev": "npx tsx src/cli.ts",
     "dev:ui": "npx tsx src/sidecar.tsx",
-    "start": "node dist/cli.js"
+    "start": "node dist/cli.js",
+    "test": "npm run build && node --test dist/*.test.js"
   },
   "repository": {
     "type": "git",

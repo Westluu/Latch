@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
+from claude_paths import claude_project_paths, find_transcript_path
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -27,9 +28,6 @@ from textual.widgets import Footer, Header, Input, ListItem, ListView, Static
 
 
 # ── Constants ────────────────────────────────────────────────────────────────
-
-CLAUDE_DIR = os.path.join(os.path.expanduser("~"), ".claude")
-PROJECTS_DIR = os.path.join(CLAUDE_DIR, "projects")
 
 TOOL_ICONS = {
     "Read": "\u25c9",       # ◉
@@ -96,77 +94,84 @@ class SessionInfo:
 
 def list_sessions(cwd: str) -> list[SessionInfo]:
     """List all Claude sessions for this project directory."""
-    project_dir = cwd.replace("/", "-")
-    project_path = os.path.join(PROJECTS_DIR, project_dir)
-    if not os.path.isdir(project_path):
-        return []
-
-    sessions = []
-    for fname in os.listdir(project_path):
-        if not fname.endswith(".jsonl"):
+    sessions_by_id: dict[str, SessionInfo] = {}
+    for project_path in claude_project_paths(cwd):
+        if not os.path.isdir(project_path):
             continue
-        fpath = os.path.join(project_path, fname)
-        sid = fname.replace(".jsonl", "")
-        size = os.path.getsize(fpath)
-        label = ""
-        first_ts = None
-        last_ts = None
+        for fname in os.listdir(project_path):
+            if not fname.endswith(".jsonl"):
+                continue
+            fpath = os.path.join(project_path, fname)
+            sid = fname.replace(".jsonl", "")
+            size = os.path.getsize(fpath)
+            label = ""
+            first_ts = None
+            last_ts = None
 
-        try:
-            with open(fpath) as f:
-                lines = f.readlines()
-
-            for tline in lines:
-                tline = tline.strip()
-                if not tline:
-                    continue
-
-                # Extract timestamp via regex — avoids full JSON parse for every line
-                ts_match = _TS_RE.search(tline)
-                if ts_match:
-                    t = _parse_ts(ts_match.group(1))
-                    if t:
-                        if first_ts is None:
-                            first_ts = t
-                        last_ts = t
-
-                # Only JSON-parse until we have the label
-                if not label:
-                    try:
-                        obj = json.loads(tline)
-                    except Exception:
-                        continue
-                    if (obj.get("type") == "user"
-                            and obj.get("isSidechain") is False
-                            and not obj.get("isMeta")):
-                        text = _extract_text(obj)
-                        first_line = text.split("\n")[0].strip() if text else ""
-                        if first_line:
-                            label = first_line[:50]
-
-        except Exception:
-            pass
-
-        if not label:
-            label = sid[:12]
-
-        ts = last_ts
-        if not ts:
             try:
-                ts = datetime.fromtimestamp(os.path.getmtime(fpath), tz=timezone.utc)
+                with open(fpath) as f:
+                    lines = f.readlines()
+
+                for tline in lines:
+                    tline = tline.strip()
+                    if not tline:
+                        continue
+
+                    # Extract timestamp via regex — avoids full JSON parse for every line
+                    ts_match = _TS_RE.search(tline)
+                    if ts_match:
+                        t = _parse_ts(ts_match.group(1))
+                        if t:
+                            if first_ts is None:
+                                first_ts = t
+                            last_ts = t
+
+                    # Only JSON-parse until we have the label
+                    if not label:
+                        try:
+                            obj = json.loads(tline)
+                        except Exception:
+                            continue
+                        if (obj.get("type") == "user"
+                                and obj.get("isSidechain") is False
+                                and not obj.get("isMeta")):
+                            text = _extract_text(obj)
+                            first_line = text.split("\n")[0].strip() if text else ""
+                            if first_line:
+                                label = first_line[:50]
+
             except Exception:
                 pass
 
-        duration = 0
-        if first_ts and last_ts and last_ts > first_ts:
-            duration = int((last_ts - first_ts).total_seconds())
+            if not label:
+                label = sid[:12]
 
-        sessions.append(SessionInfo(
-            session_id=sid, label=label, timestamp=ts,
-            started_at=first_ts, duration_secs=duration,
-            file_size=size, path=fpath,
-        ))
+            ts = last_ts
+            if not ts:
+                try:
+                    ts = datetime.fromtimestamp(os.path.getmtime(fpath), tz=timezone.utc)
+                except Exception:
+                    pass
 
+            duration = 0
+            if first_ts and last_ts and last_ts > first_ts:
+                duration = int((last_ts - first_ts).total_seconds())
+
+            session = SessionInfo(
+                session_id=sid, label=label, timestamp=ts,
+                started_at=first_ts, duration_secs=duration,
+                file_size=size, path=fpath,
+            )
+            existing = sessions_by_id.get(sid)
+            existing_ts = existing.timestamp if existing else None
+            session_ts = session.timestamp
+            if (
+                existing is None
+                or (session_ts is not None and (existing_ts is None or session_ts >= existing_ts))
+            ):
+                sessions_by_id[sid] = session
+
+    sessions = list(sessions_by_id.values())
     sessions.sort(key=lambda s: s.timestamp or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
     return sessions
 
@@ -204,9 +209,8 @@ def search_session_content(path: str, query: str) -> bool:
 
 def parse_messages(cwd: str, session_id: str) -> list[Message]:
     """Parse all messages from a session transcript in a single pass."""
-    project_dir = cwd.replace("/", "-")
-    transcript = os.path.join(PROJECTS_DIR, project_dir, f"{session_id}.jsonl")
-    if not os.path.exists(transcript):
+    transcript = find_transcript_path(cwd, session_id)
+    if not transcript:
         return []
 
     try:

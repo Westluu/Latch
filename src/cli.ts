@@ -1,48 +1,341 @@
 #!/usr/bin/env node
 
-import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSession, launchWithAgent, saveSidecarPaneId, focusOrOpenSidecar, openChatPopup } from "./tmux.js";
+import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSession, launchWithAgent, saveSidecarPaneId, focusOrOpenSidecar, focusOrOpenWorkspaces, openChatPopup, openProjectsPopup, switchClientToAgentSession, openCommandInNewTerminal, openAgentInTargetPane } from "./tmux.js";
 import { sendSidecarMessage } from "./ipc.js";
 import { initHook, removeHook } from "./init.js";
+import { addCurrentProject, addProject, createWorktreeWorkspace, getProject, getProjectPath, getWorkspace, listProjects, listWorkspaces, markProjectOpened, markWorkspaceOpened, removeProject, removeWorkspace } from "./projects.js";
+import { claudeProjectPaths } from "./claude.js";
 import { readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
 const command = args[0];
 
-if (args.includes("--help") || args.includes("-h")) {
+function printHelp(): void {
   console.log(`
 latch — terminal sidecar for agent-driven CLI workflows
 
 Usage:
-<<<<<<< ours
-  latch claude       Launch Claude Code in a tmux session with Latch
-  latch open <file>  Open a file in the Latch preview
-  latch toggle       Focus sidecar if open, or open it if closed
-  latch chat         Open conversation viewer as a floating popup
-  latch init         Add Claude Code hooks and tmux keybinding (CMD+E); installs tmux if missing
-    --no-install-tmux  Skip automatic tmux installation during init
-  latch remove       Remove the Claude Code hooks and tmux keybinding
-  latch --help       Show this help message
-  latch --version    Show version
-=======
   latch claude               Launch Claude Code in a tmux session with Latch
   latch <project>            Launch Claude Code for a saved project
+  latch projects             Open the projects picker as a popup
+  latch workspaces           Open the workspaces picker in a left pane
   latch project add --current <name>
   latch project add <path> <name>
-  latch project open <name>
+  latch project open <name> [--popup|--tab|--current-session]
   latch project list
   latch project remove <name>
+  latch workspace list [project]
+  latch workspace create <project> <workspace> [branch]
   latch open <file>          Open a file in the Latch preview
   latch toggle               Focus sidecar if open, or open it if closed
   latch chat                 Open conversation viewer as a floating popup
-  latch init                 Add Claude Code hooks and tmux keybinding (CMD+E); installs tmux if missing
+  latch init                 Add Claude Code hooks and tmux keybindings (CMD+E, CMD+P, CMD+S); installs tmux if missing
     --no-install-tmux        Skip automatic tmux installation during init
   latch remove               Remove the Claude Code hooks and tmux keybinding
   latch --help               Show this help message
   latch --version            Show version
->>>>>>> theirs
 `);
+}
+
+function exitWithError(error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(message);
+  process.exit(1);
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function projectLaunchCommand(alias: string): string {
+  const aliasArg = shellQuote(alias);
+  return `latch ${aliasArg}`;
+}
+
+function openSavedProject(alias: string, options?: { popup?: boolean; tab?: boolean; currentSession?: boolean }): never {
+  try {
+    const project = getProject(alias);
+    if (!project) {
+      console.error(`Unknown project alias "${alias}".`);
+      process.exit(1);
+    }
+    const projectPath = getProjectPath(project);
+
+    markProjectOpened(alias);
+    if (options?.popup) {
+      switchClientToAgentSession(projectPath, "claude");
+    }
+    if (options?.currentSession) {
+      openAgentInTargetPane(process.cwd(), projectPath, "claude");
+    }
+    if (options?.tab) {
+      openCommandInNewTerminal(process.cwd(), projectLaunchCommand(alias));
+    }
+    launchWithAgent(projectPath, "claude");
+  } catch (error: unknown) {
+    exitWithError(error);
+  }
+}
+
+function workspaceLaunchCommand(projectAlias: string, workspaceName: string): string {
+  const projectArg = shellQuote(projectAlias);
+  const workspaceArg = shellQuote(workspaceName);
+  return `latch workspace open ${projectArg} ${workspaceArg}`;
+}
+
+function openSavedWorkspace(
+  projectAlias: string,
+  workspaceName: string,
+  options?: { popup?: boolean; tab?: boolean; currentSession?: boolean }
+): never {
+  try {
+    const workspace = getWorkspace(projectAlias, workspaceName);
+    if (!workspace) {
+      console.error(`Unknown workspace "${projectAlias}/${workspaceName}".`);
+      process.exit(1);
+    }
+
+    markWorkspaceOpened(projectAlias, workspaceName);
+    if (options?.popup) {
+      switchClientToAgentSession(workspace.path, "claude");
+    }
+    if (options?.currentSession) {
+      openAgentInTargetPane(process.cwd(), workspace.path, "claude");
+    }
+    if (options?.tab) {
+      openCommandInNewTerminal(process.cwd(), workspaceLaunchCommand(projectAlias, workspaceName));
+    }
+    launchWithAgent(workspace.path, "claude");
+  } catch (error: unknown) {
+    exitWithError(error);
+  }
+}
+
+function printProjectList(): void {
+  const projects = listProjects();
+  if (projects.length === 0) {
+    console.log("No saved projects yet.");
+    console.log("Add one with: latch project add --current <name>");
+    return;
+  }
+
+  console.log("Projects");
+  console.log("");
+  for (const { alias, project } of projects) {
+    console.log(`${alias.padEnd(16)} ${getProjectPath(project)}`);
+  }
+}
+
+function handleProjectCommand(projectArgs: string[]): void {
+  const subcommand = projectArgs[0];
+
+  if (!subcommand || subcommand === "--help" || subcommand === "-h") {
+    console.log(`
+Usage:
+  latch project add --current <name>
+  latch project add <path> <name>
+  latch project open <name> [--popup|--tab|--current-session]
+  latch project list
+  latch project remove <name>
+`);
+    process.exit(0);
+  }
+
+  if (subcommand === "list") {
+    printProjectList();
+    process.exit(0);
+  }
+
+  if (subcommand === "add") {
+    if (projectArgs[1] === "--current") {
+      const alias = projectArgs[2];
+      if (!alias || projectArgs[3]) {
+        console.error("Usage: latch project add --current <name>");
+        process.exit(1);
+      }
+
+      try {
+        const project = addCurrentProject(alias);
+        console.log(`Saved project "${alias}" -> ${getProjectPath(project)}`);
+      } catch (error: unknown) {
+        exitWithError(error);
+      }
+      process.exit(0);
+    }
+
+    const inputPath = projectArgs[1];
+    const alias = projectArgs[2];
+    if (!inputPath || !alias || projectArgs[3]) {
+      console.error("Usage: latch project add <path> <name>");
+      process.exit(1);
+    }
+
+    try {
+      const project = addProject(alias, inputPath);
+      console.log(`Saved project "${alias}" -> ${getProjectPath(project)}`);
+    } catch (error: unknown) {
+      exitWithError(error);
+    }
+    process.exit(0);
+  }
+
+  if (subcommand === "open") {
+    const alias = projectArgs[1];
+    const popup = projectArgs.includes("--popup");
+    const tab = projectArgs.includes("--tab");
+    const currentSession = projectArgs.includes("--current-session");
+    const extraArgs = projectArgs.slice(2).filter((arg) => arg !== "--popup" && arg !== "--tab" && arg !== "--current-session");
+    if (!alias || extraArgs.length > 0) {
+      console.error("Usage: latch project open <name> [--popup|--tab|--current-session]");
+      process.exit(1);
+    }
+    openSavedProject(alias, { popup, tab, currentSession });
+  }
+
+  if (subcommand === "remove") {
+    const alias = projectArgs[1];
+    if (!alias || projectArgs[2]) {
+      console.error("Usage: latch project remove <name>");
+      process.exit(1);
+    }
+
+    try {
+      removeProject(alias);
+      console.log(`Removed project "${alias}".`);
+    } catch (error: unknown) {
+      exitWithError(error);
+    }
+    process.exit(0);
+  }
+
+  console.error(`Unknown project command "${subcommand}".`);
+  process.exit(1);
+}
+
+function printWorkspaceList(projectAlias?: string): void {
+  if (projectAlias) {
+    const workspaces = listWorkspaces(projectAlias);
+    if (workspaces.length === 0) {
+      console.log(`No workspaces saved for "${projectAlias}".`);
+      return;
+    }
+
+    console.log(`Workspaces for ${projectAlias}`);
+    console.log("");
+    for (const { name, workspace, isDefault } of workspaces) {
+      const label = isDefault ? `${name}*` : name;
+      console.log(`${label.padEnd(16)} ${workspace.kind.padEnd(8)} ${workspace.path}`);
+    }
+    return;
+  }
+
+  const projects = listProjects();
+  if (projects.length === 0) {
+    console.log("No saved projects yet.");
+    console.log("Add one with: latch project add --current <name>");
+    return;
+  }
+
+  for (const { alias, project } of projects) {
+    console.log(alias);
+    for (const { name, workspace, isDefault } of listWorkspaces(alias)) {
+      const label = isDefault ? `${name}*` : name;
+      console.log(`  ${label.padEnd(14)} ${workspace.kind.padEnd(8)} ${workspace.path}`);
+    }
+    console.log("");
+  }
+}
+
+function handleWorkspaceCommand(workspaceArgs: string[]): void {
+  const subcommand = workspaceArgs[0];
+
+  if (!subcommand || subcommand === "--help" || subcommand === "-h") {
+    console.log(`
+Usage:
+  latch workspace list [project]
+  latch workspace create <project> <workspace> [branch]
+  latch workspace open <project> <workspace> [--popup|--tab|--current-session]
+  latch workspace remove <project> <workspace>
+`);
+    process.exit(0);
+  }
+
+  if (subcommand === "list") {
+    const projectAlias = workspaceArgs[1];
+    if (workspaceArgs[2]) {
+      console.error("Usage: latch workspace list [project]");
+      process.exit(1);
+    }
+
+    try {
+      printWorkspaceList(projectAlias);
+    } catch (error: unknown) {
+      exitWithError(error);
+    }
+    process.exit(0);
+  }
+
+  if (subcommand === "create") {
+    const projectAlias = workspaceArgs[1];
+    const workspaceName = workspaceArgs[2];
+    const branch = workspaceArgs[3];
+    if (!projectAlias || !workspaceName || workspaceArgs[4]) {
+      console.error("Usage: latch workspace create <project> <workspace> [branch]");
+      process.exit(1);
+    }
+
+    try {
+      const workspace = createWorktreeWorkspace(projectAlias, workspaceName, { branch });
+      console.log(
+        `Created workspace "${projectAlias}/${workspaceName}" -> ${workspace.path} (branch ${workspace.branch ?? branch ?? workspaceName})`
+      );
+    } catch (error: unknown) {
+      exitWithError(error);
+    }
+    process.exit(0);
+  }
+
+  if (subcommand === "open") {
+    const projectAlias = workspaceArgs[1];
+    const workspaceName = workspaceArgs[2];
+    const popup = workspaceArgs.includes("--popup");
+    const tab = workspaceArgs.includes("--tab");
+    const currentSession = workspaceArgs.includes("--current-session");
+    const extraArgs = workspaceArgs
+      .slice(3)
+      .filter((arg) => arg !== "--popup" && arg !== "--tab" && arg !== "--current-session");
+    if (!projectAlias || !workspaceName || extraArgs.length > 0) {
+      console.error("Usage: latch workspace open <project> <workspace> [--popup|--tab|--current-session]");
+      process.exit(1);
+    }
+
+    openSavedWorkspace(projectAlias, workspaceName, { popup, tab, currentSession });
+  }
+
+  if (subcommand === "remove") {
+    const projectAlias = workspaceArgs[1];
+    const workspaceName = workspaceArgs[2];
+    if (!projectAlias || !workspaceName || workspaceArgs[3]) {
+      console.error("Usage: latch workspace remove <project> <workspace>");
+      process.exit(1);
+    }
+
+    try {
+      removeWorkspace(projectAlias, workspaceName);
+      console.log(`Removed workspace "${projectAlias}/${workspaceName}".`);
+    } catch (error: unknown) {
+      exitWithError(error);
+    }
+    process.exit(0);
+  }
+
+  console.error(`Unknown workspace command "${subcommand}".`);
+  process.exit(1);
+}
+
+if (args.includes("--help") || args.includes("-h")) {
+  printHelp();
   process.exit(0);
 }
 
@@ -59,6 +352,14 @@ if (command && command in AGENTS) {
   const cwd = process.cwd();
   launchWithAgent(cwd, AGENTS[command]);
   // launchWithAgent handles process exit internally
+}
+
+if (command === "project") {
+  handleProjectCommand(args.slice(1));
+}
+
+if (command === "workspace") {
+  handleWorkspaceCommand(args.slice(1));
 }
 
 if (command === "init") {
@@ -84,23 +385,62 @@ if (command === "chat") {
     console.error("latch chat: must be run inside a tmux session.");
     process.exit(1);
   }
-  // Find the most recent transcript for this cwd (optional — chat.py lists all sessions)
-  const projectDir = cwd.replace(/\//g, "-");
-  const projectPath = join(homedir(), ".claude", "projects", projectDir);
   let sessionId = "";
-  try {
-    const files = readdirSync(projectPath)
-      .filter((f: string) => f.endsWith(".jsonl"))
-      .map((f: string) => ({ name: f, mtime: statSync(join(projectPath, f)).mtimeMs }))
-      .sort((a: { mtime: number }, b: { mtime: number }) => b.mtime - a.mtime);
-    if (files.length > 0) {
-      sessionId = files[0].name.replace(/\.jsonl$/, "");
-    }
-  } catch {}
+  const transcripts = new Map<string, { name: string; mtime: number }>();
+  for (const projectPath of claudeProjectPaths(cwd)) {
+    try {
+      const files = readdirSync(projectPath)
+        .filter((f: string) => f.endsWith(".jsonl"))
+        .map((f: string) => ({ name: f, mtime: statSync(`${projectPath}/${f}`).mtimeMs }));
+
+      for (const file of files) {
+        const existing = transcripts.get(file.name);
+        if (!existing || file.mtime > existing.mtime) {
+          transcripts.set(file.name, file);
+        }
+      }
+    } catch {}
+  }
+  const [latest] = [...transcripts.values()].sort(
+    (a: { mtime: number }, b: { mtime: number }) => b.mtime - a.mtime
+  );
+  if (latest) {
+    sessionId = latest.name.replace(/\.jsonl$/, "");
+  }
   try {
     openChatPopup(cwd, sessionId);
   } catch (e: unknown) {
     console.error("latch chat: failed to open popup:", (e as Error).message);
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
+if (command === "projects") {
+  const cwd = process.cwd();
+  if (!isInsideTmux()) {
+    console.error("latch projects: must be run inside a tmux session.");
+    process.exit(1);
+  }
+  try {
+    openProjectsPopup(cwd);
+  } catch (e: unknown) {
+    console.error("latch projects: failed to open popup:", (e as Error).message);
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
+if (command === "workspaces") {
+  const cwd = process.cwd();
+  if (!isInsideTmux()) {
+    console.error("latch workspaces: must be run inside a tmux session.");
+    process.exit(1);
+  }
+  try {
+    focusOrOpenWorkspaces(cwd);
+  } catch (e: unknown) {
+    console.error("latch workspaces: failed to open pane:", (e as Error).message);
     process.exit(1);
   }
   process.exit(0);
@@ -165,6 +505,20 @@ if (command === "open") {
 }
 
 const cwd = process.cwd();
+
+if (command) {
+  try {
+    const project = getProject(command);
+    if (project) {
+      openSavedProject(command);
+    }
+  } catch (error: unknown) {
+    exitWithError(error);
+  }
+
+  console.error(`Unknown command or project "${command}".`);
+  process.exit(1);
+}
 
 if (isInsideTmux()) {
   console.log("Latch: opening pane...");
