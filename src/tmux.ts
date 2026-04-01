@@ -19,6 +19,13 @@ function workspacesPanePath(cwd: string): string {
   return join(dir, `${hash}-workspaces-pane.txt`);
 }
 
+function projectTargetPanePath(cwd: string): string {
+  const hash = createHash("sha256").update(`${cwd}:project-target`).digest("hex").slice(0, 12);
+  const dir = join(tmpdir(), "latch");
+  mkdirSync(dir, { recursive: true });
+  return join(dir, `${hash}-project-target-pane.txt`);
+}
+
 export function saveSidecarPaneId(cwd: string, sessionId: string, paneId: string): void {
   writeFileSync(sidecarPanePath(cwd, sessionId), paneId);
 }
@@ -39,7 +46,25 @@ export function getWorkspacesPaneId(cwd: string): string | null {
   return readFileSync(p, "utf-8").trim() || null;
 }
 
+export function saveProjectTargetPaneId(cwd: string, paneId: string): void {
+  writeFileSync(projectTargetPanePath(cwd), paneId);
+}
+
+export function getProjectTargetPaneId(cwd: string): string | null {
+  const p = projectTargetPanePath(cwd);
+  if (!existsSync(p)) return null;
+  return readFileSync(p, "utf-8").trim() || null;
+}
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+type SupportedTerminal = "ghostty" | "unknown";
+
+function detectTerminal(): SupportedTerminal {
+  if (process.env.TERM_PROGRAM === "ghostty") return "ghostty";
+  if (process.env.GHOSTTY_BIN_DIR || process.env.GHOSTTY_RESOURCES_DIR) return "ghostty";
+  return "unknown";
+}
 
 export function isInsideTmux(): boolean {
   return !!process.env.TMUX;
@@ -62,6 +87,15 @@ export function getPaneSession(paneId: string): string {
 export function getCurrentTmuxSession(): string {
   try {
     return run("tmux display-message -p '#S'");
+  } catch {
+    return "";
+  }
+}
+
+/** Returns the pane id of the current process context, or "" on failure. */
+export function getCurrentPaneId(): string {
+  try {
+    return run("tmux display-message -p '#{pane_id}'");
   } catch {
     return "";
   }
@@ -151,6 +185,70 @@ export function switchClientToAgentSession(cwd: string, agentCommand: string): n
   process.exit(0);
 }
 
+export function openAgentInTargetPane(originCwd: string, projectCwd: string, agentCommand: string): never {
+  if (!isInsideTmux()) {
+    launchWithAgent(projectCwd, agentCommand);
+  }
+
+  const targetPane = getProjectTargetPaneId(originCwd) || getCurrentPaneId();
+  if (!targetPane) {
+    launchWithAgent(projectCwd, agentCommand);
+  }
+
+  const loadingPy = join(__dirname, "..", "python", "loading.py");
+  run(`tmux respawn-pane -k -t ${targetPane} -c '${projectCwd}' 'python3 "${loadingPy}" "${agentCommand}"'`);
+  run(`tmux select-pane -t ${targetPane}`);
+  process.exit(0);
+}
+
+export function openCommandInNewWindow(cwd: string, command: string): never {
+  if (!isInsideTmux()) {
+    const result = spawnSync(command, [], {
+      cwd,
+      stdio: "inherit",
+      shell: true,
+    });
+    process.exit(result.status ?? 0);
+  }
+
+  const sessionName = getCurrentTmuxSession();
+  const targetFlag = sessionName ? `-t ${sessionName}` : "";
+  const windowId = run(
+    `tmux new-window -P -F '#{window_id}' ${targetFlag} -c '${cwd}' '${command}'`
+  );
+  run(`tmux select-window -t ${windowId}`);
+  process.exit(0);
+}
+
+function quoteAppleScriptString(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+export function openCommandInNewTerminal(cwd: string, command: string): never {
+  if (process.platform === "darwin" && detectTerminal() === "ghostty") {
+    const result = spawnSync(
+      "osascript",
+      [
+        "-e", 'tell application "Ghostty"',
+        "-e", "activate",
+        "-e", "set cfg to new surface configuration",
+        "-e", `set initial working directory of cfg to "${quoteAppleScriptString(cwd)}"`,
+        "-e", "set win to front window",
+        "-e", "set newTab to new tab in win with configuration cfg",
+        "-e", "set term to focused terminal of newTab",
+        "-e", `input text "${quoteAppleScriptString(command)}" to term`,
+        "-e", 'send key "enter" to term',
+        "-e", "end tell",
+      ],
+      { stdio: "inherit" }
+    );
+
+    process.exit(result.status ?? 0);
+  }
+
+  openCommandInNewWindow(cwd, command);
+}
+
 // ── tray pane tracking ──────────────────────────────────────────────────────
 
 function trayPanePath(cwd: string, sessionId: string = ""): string {
@@ -211,6 +309,8 @@ function projectsCommand(cwd: string): string {
 }
 
 export function openProjectsPopup(cwd: string): void {
+  const currentPane = getCurrentPaneId();
+  if (currentPane) saveProjectTargetPaneId(cwd, currentPane);
   run(
     `tmux display-popup -w 75% -h 65% -E '${projectsCommand(cwd)}'`
   );
@@ -223,8 +323,10 @@ export function splitAndLaunchWorkspaces(cwd: string): string {
 }
 
 export function focusOrOpenWorkspaces(cwd: string): void {
+  const currentPane = getCurrentPaneId();
   const paneId = getWorkspacesPaneId(cwd);
   if (paneId) {
+    if (currentPane && currentPane !== paneId) saveProjectTargetPaneId(cwd, currentPane);
     try {
       run(`tmux display-message -t ${paneId} -p ''`);
       run(`tmux select-pane -t ${paneId}`);
@@ -234,6 +336,7 @@ export function focusOrOpenWorkspaces(cwd: string): void {
     }
   }
 
+  if (currentPane) saveProjectTargetPaneId(cwd, currentPane);
   const newPaneId = splitAndLaunchWorkspaces(cwd);
   saveWorkspacesPaneId(cwd, newPaneId);
 }

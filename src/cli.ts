@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 
-import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSession, launchWithAgent, saveSidecarPaneId, focusOrOpenSidecar, focusOrOpenWorkspaces, openChatPopup, openProjectsPopup, switchClientToAgentSession } from "./tmux.js";
+import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSession, launchWithAgent, saveSidecarPaneId, focusOrOpenSidecar, focusOrOpenWorkspaces, openChatPopup, openProjectsPopup, switchClientToAgentSession, openCommandInNewTerminal, openAgentInTargetPane } from "./tmux.js";
 import { sendSidecarMessage } from "./ipc.js";
 import { initHook, removeHook } from "./init.js";
 import { addCurrentProject, addProject, getProject, listProjects, markProjectOpened, removeProject } from "./projects.js";
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -22,7 +23,7 @@ Usage:
   latch workspaces           Open the workspaces picker in a left pane
   latch project add --current <name>
   latch project add <path> <name>
-  latch project open <name>
+  latch project open <name> [--popup|--tab|--current-session]
   latch project list
   latch project remove <name>
   latch open <file>          Open a file in the Latch preview
@@ -42,7 +43,16 @@ function exitWithError(error: unknown): never {
   process.exit(1);
 }
 
-function openSavedProject(alias: string, options?: { popup?: boolean }): never {
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\"'\"'`)}'`;
+}
+
+function projectLaunchCommand(alias: string): string {
+  const aliasArg = shellQuote(alias);
+  return `latch ${aliasArg}`;
+}
+
+function openSavedProject(alias: string, options?: { popup?: boolean; tab?: boolean; currentSession?: boolean }): never {
   try {
     const project = getProject(alias);
     if (!project) {
@@ -53,6 +63,12 @@ function openSavedProject(alias: string, options?: { popup?: boolean }): never {
     markProjectOpened(alias);
     if (options?.popup) {
       switchClientToAgentSession(project.path, "claude");
+    }
+    if (options?.currentSession) {
+      openAgentInTargetPane(process.cwd(), project.path, "claude");
+    }
+    if (options?.tab) {
+      openCommandInNewTerminal(process.cwd(), projectLaunchCommand(alias));
     }
     launchWithAgent(project.path, "claude");
   } catch (error: unknown) {
@@ -83,7 +99,7 @@ function handleProjectCommand(projectArgs: string[]): void {
 Usage:
   latch project add --current <name>
   latch project add <path> <name>
-  latch project open <name>
+  latch project open <name> [--popup|--tab|--current-session]
   latch project list
   latch project remove <name>
 `);
@@ -131,12 +147,14 @@ Usage:
   if (subcommand === "open") {
     const alias = projectArgs[1];
     const popup = projectArgs.includes("--popup");
-    const extraArgs = projectArgs.slice(2).filter((arg) => arg !== "--popup");
+    const tab = projectArgs.includes("--tab");
+    const currentSession = projectArgs.includes("--current-session");
+    const extraArgs = projectArgs.slice(2).filter((arg) => arg !== "--popup" && arg !== "--tab" && arg !== "--current-session");
     if (!alias || extraArgs.length > 0) {
-      console.error("Usage: latch project open <name>");
+      console.error("Usage: latch project open <name> [--popup|--tab|--current-session]");
       process.exit(1);
     }
-    openSavedProject(alias, { popup });
+    openSavedProject(alias, { popup, tab, currentSession });
   }
 
   if (subcommand === "remove") {

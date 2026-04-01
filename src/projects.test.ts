@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -252,7 +253,7 @@ test("cli shorthand opens a saved project with its target cwd and records lastOp
     const tmuxStub = join(binDir, "tmux");
     writeFileSync(
       tmuxStub,
-      "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$LATCH_TMUX_LOG\"\nexit 0\n"
+      "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$LATCH_TMUX_LOG\"\nif [ \"$1\" = \"display-message\" ]; then printf '%s\\n' 'latch-test'; fi\nif [ \"$1\" = \"new-window\" ]; then printf '%s\\n' '@42'; fi\nexit 0\n"
     );
     chmodSync(tmuxStub, 0o755);
 
@@ -278,6 +279,108 @@ test("cli shorthand opens a saved project with its target cwd and records lastOp
     const saved = getProject("frontend", configPathFor(configHome));
     assert.ok(saved?.lastOpenedAt);
   });
+});
+
+test("python projects app registers ctrl+t for open in tab", () => {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import sys",
+        "sys.path.insert(0, 'python')",
+        "import projects",
+        "binding = next(binding for binding in projects.ProjectsApp.BINDINGS if binding.action == 'open_selected_in_tab')",
+        "print(binding.key)",
+        "print(binding.priority)",
+      ].join("; "),
+    ],
+    {
+      cwd: realpathSync(process.cwd()),
+      encoding: "utf-8",
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  const lines = result.stdout.trim().split(/\r?\n/);
+  assert.equal(lines[0], "ctrl+t,t");
+  assert.equal(lines[1], "True");
+});
+
+test("python projects app open-in-tab action invokes project open --tab", () => {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import json",
+        "import sys",
+        "from types import MethodType, SimpleNamespace",
+        "sys.path.insert(0, 'python')",
+        "import projects",
+        "app = projects.ProjectsApp('/tmp')",
+        "calls = {}",
+        "def run_cli(self, args):",
+        "    calls['args'] = args",
+        "    return SimpleNamespace(returncode=0, stdout='', stderr='')",
+        "def exit_app(self):",
+        "    calls['exited'] = True",
+        "app._selected_project = MethodType(lambda self: projects.ProjectInfo('frontend', '/tmp/frontend', '', '', None), app)",
+        "app._run_cli = MethodType(run_cli, app)",
+        "app.exit = MethodType(exit_app, app)",
+        "app.action_open_selected_in_tab()",
+        "print(json.dumps(calls, sort_keys=True))",
+      ].join("\n"),
+    ],
+    {
+      cwd: realpathSync(process.cwd()),
+      encoding: "utf-8",
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(
+    JSON.parse(result.stdout.trim()),
+    { args: ["project", "open", "frontend", "--tab"], exited: true }
+  );
+});
+
+test("python projects app open action invokes project open --current-session", () => {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import json",
+        "import sys",
+        "from types import MethodType, SimpleNamespace",
+        "sys.path.insert(0, 'python')",
+        "import projects",
+        "app = projects.ProjectsApp('/tmp')",
+        "calls = {}",
+        "def run_cli(self, args):",
+        "    calls['args'] = args",
+        "    return SimpleNamespace(returncode=0, stdout='', stderr='')",
+        "def exit_app(self):",
+        "    calls['exited'] = True",
+        "app._selected_project = MethodType(lambda self: projects.ProjectInfo('frontend', '/tmp/frontend', '', '', None), app)",
+        "app._run_cli = MethodType(run_cli, app)",
+        "app.exit = MethodType(exit_app, app)",
+        "app.action_open_selected()",
+        "print(json.dumps(calls, sort_keys=True))",
+      ].join("\n"),
+    ],
+    {
+      cwd: realpathSync(process.cwd()),
+      encoding: "utf-8",
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(
+    JSON.parse(result.stdout.trim()),
+    { args: ["project", "open", "frontend", "--current-session"], exited: true }
+  );
 });
 
 test("cli built-in commands win over project shorthand lookup", () => {
@@ -380,7 +483,7 @@ test("cli project open --popup switches the client to a new tmux session", () =>
     const tmuxStub = join(binDir, "tmux");
     writeFileSync(
       tmuxStub,
-      "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$LATCH_TMUX_LOG\"\nexit 0\n"
+      "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$LATCH_TMUX_LOG\"\nif [ \"$1\" = \"display-message\" ]; then printf '%s\\n' 'latch-test'; fi\nif [ \"$1\" = \"new-window\" ]; then printf '%s\\n' '@42'; fi\nexit 0\n"
     );
     chmodSync(tmuxStub, 0o755);
 
@@ -391,6 +494,9 @@ test("cli project open --popup switches the client to a new tmux session", () =>
       ...process.env,
       TMUX: "1",
       XDG_CONFIG_HOME: configHome,
+      TERM_PROGRAM: "",
+      GHOSTTY_BIN_DIR: "",
+      GHOSTTY_RESOURCES_DIR: "",
       PATH: `${binDir}:${process.env.PATH ?? ""}`,
       LATCH_TMUX_LOG: tmuxLog,
     };
@@ -401,5 +507,131 @@ test("cli project open --popup switches the client to a new tmux session", () =>
     const logged = readFileSync(tmuxLog, "utf-8");
     assert.match(logged, /new-session -d -s latch-/);
     assert.match(logged, /switch-client -t latch-/);
+  });
+});
+
+test("cli project open --current-session respawns the stored target pane", () => {
+  withTempDir((dir) => {
+    const configHome = join(dir, "config");
+    const binDir = join(dir, "bin");
+    const tmpRoot = join(dir, "tmp");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(tmpRoot, { recursive: true });
+
+    const tmuxLog = join(dir, "tmux.log");
+    const tmuxStub = join(binDir, "tmux");
+    writeFileSync(
+      tmuxStub,
+      "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$LATCH_TMUX_LOG\"\nif [ \"$1\" = \"display-message\" ] && [ \"$4\" = '#{pane_id}' ]; then printf '%s\\n' '%%main'; fi\nexit 0\n"
+    );
+    chmodSync(tmuxStub, 0o755);
+
+    const projectPath = projectFixturePath(dir, "frontend");
+    addProject("frontend", projectPath, { configPath: configPathFor(configHome) });
+
+    const repoCwd = realpathSync(process.cwd());
+    const targetHash = createHash("sha256").update(`${repoCwd}:project-target`).digest("hex").slice(0, 12);
+    const latchTmp = join(tmpRoot, "latch");
+    mkdirSync(latchTmp, { recursive: true });
+    writeFileSync(join(latchTmp, `${targetHash}-project-target-pane.txt`), "%target");
+
+    const env = {
+      ...process.env,
+      TMUX: "1",
+      TMPDIR: tmpRoot,
+      XDG_CONFIG_HOME: configHome,
+      TERM_PROGRAM: "",
+      GHOSTTY_BIN_DIR: "",
+      GHOSTTY_RESOURCES_DIR: "",
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      LATCH_TMUX_LOG: tmuxLog,
+    };
+
+    const result = runCli(["project", "open", "frontend", "--current-session"], { env, cwd: repoCwd });
+    assert.equal(result.status, 0);
+
+    const logged = readFileSync(tmuxLog, "utf-8");
+    assert.match(logged, /respawn-pane -k -t %target -c /);
+    assert.match(logged, /python3 ".*loading\.py" "claude"/);
+    assert.match(logged, /select-pane -t %target/);
+  });
+});
+
+test("cli project open --tab opens the project in a new tmux window", () => {
+  withTempDir((dir) => {
+    const configHome = join(dir, "config");
+    const binDir = join(dir, "bin");
+    mkdirSync(binDir, { recursive: true });
+
+    const tmuxLog = join(dir, "tmux.log");
+    const tmuxStub = join(binDir, "tmux");
+    writeFileSync(
+      tmuxStub,
+      "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$LATCH_TMUX_LOG\"\nif [ \"$1\" = \"display-message\" ]; then printf '%s\\n' 'latch-test'; fi\nif [ \"$1\" = \"new-window\" ]; then printf '%s\\n' '@42'; fi\nexit 0\n"
+    );
+    chmodSync(tmuxStub, 0o755);
+
+    const projectPath = projectFixturePath(dir, "frontend");
+    addProject("frontend", projectPath, { configPath: configPathFor(configHome) });
+
+    const env = {
+      ...process.env,
+      TMUX: "1",
+      XDG_CONFIG_HOME: configHome,
+      TERM_PROGRAM: "",
+      GHOSTTY_BIN_DIR: "",
+      GHOSTTY_RESOURCES_DIR: "",
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      LATCH_TMUX_LOG: tmuxLog,
+    };
+
+    const result = runCli(["project", "open", "frontend", "--tab"], { env });
+    assert.equal(result.status, 0);
+
+    const logged = readFileSync(tmuxLog, "utf-8");
+    assert.match(logged, /display-message -p #S/);
+    assert.match(logged, /new-window -P -F #\{window_id\} -t /);
+    assert.match(logged, /latch frontend/);
+    assert.match(logged, /select-window -t /);
+  });
+});
+
+test("cli project open --tab opens a new Ghostty terminal on macOS", () => {
+  withTempDir((dir) => {
+    const configHome = join(dir, "config");
+    const binDir = join(dir, "bin");
+    mkdirSync(binDir, { recursive: true });
+
+    const osaLog = join(dir, "osascript.log");
+    const osascriptStub = join(binDir, "osascript");
+    writeFileSync(
+      osascriptStub,
+      "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$LATCH_OSASCRIPT_LOG\"\nexit 0\n"
+    );
+    chmodSync(osascriptStub, 0o755);
+
+    const projectPath = projectFixturePath(dir, "frontend");
+    addProject("frontend", projectPath, { configPath: configPathFor(configHome) });
+
+    const env = {
+      ...process.env,
+      TMUX: "1",
+      TERM_PROGRAM: "ghostty",
+      XDG_CONFIG_HOME: configHome,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      LATCH_OSASCRIPT_LOG: osaLog,
+    };
+
+    const result = runCli(["project", "open", "frontend", "--tab"], { env });
+    assert.equal(result.status, 0);
+
+    const logged = readFileSync(osaLog, "utf-8");
+    assert.match(logged, /tell application "Ghostty"/);
+    assert.match(logged, /set cfg to new surface configuration/);
+    assert.match(logged, /set win to front window/);
+    assert.match(logged, /set newTab to new tab in win with configuration cfg/);
+    assert.match(logged, /set term to focused terminal of newTab/);
+    assert.match(logged, /input text "latch 'frontend'" to term/);
+    assert.match(logged, /send key "enter" to term/);
   });
 });
