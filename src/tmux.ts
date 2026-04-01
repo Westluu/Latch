@@ -4,67 +4,65 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
+import { detectTerminal } from "./terminal.js";
 
-function sidecarPanePath(cwd: string, sessionId: string = ""): string {
-  const hash = createHash("sha256").update(cwd + sessionId).digest("hex").slice(0, 12);
+function paneStatePath(hashKey: string, suffix: string): string {
+  const hash = createHash("sha256").update(hashKey).digest("hex").slice(0, 12);
   const dir = join(tmpdir(), "latch");
   mkdirSync(dir, { recursive: true });
-  return join(dir, `${hash}-sidecar-pane.txt`);
+  return join(dir, `${hash}-${suffix}.txt`);
+}
+
+function readPaneState(path: string): string | null {
+  if (!existsSync(path)) return null;
+  return readFileSync(path, "utf-8").trim() || null;
+}
+
+function writePaneState(path: string, value: string): void {
+  writeFileSync(path, value);
+}
+
+function removePaneState(path: string): void {
+  try { unlinkSync(path); } catch {}
+}
+
+function sidecarPanePath(cwd: string, sessionId: string = ""): string {
+  return paneStatePath(cwd + sessionId, "sidecar-pane");
 }
 
 function workspacesPanePath(cwd: string): string {
-  const hash = createHash("sha256").update(`${cwd}:workspaces`).digest("hex").slice(0, 12);
-  const dir = join(tmpdir(), "latch");
-  mkdirSync(dir, { recursive: true });
-  return join(dir, `${hash}-workspaces-pane.txt`);
+  return paneStatePath(`${cwd}:workspaces`, "workspaces-pane");
 }
 
 function projectTargetPanePath(cwd: string): string {
-  const hash = createHash("sha256").update(`${cwd}:project-target`).digest("hex").slice(0, 12);
-  const dir = join(tmpdir(), "latch");
-  mkdirSync(dir, { recursive: true });
-  return join(dir, `${hash}-project-target-pane.txt`);
+  return paneStatePath(`${cwd}:project-target`, "project-target-pane");
 }
 
 export function saveSidecarPaneId(cwd: string, sessionId: string, paneId: string): void {
-  writeFileSync(sidecarPanePath(cwd, sessionId), paneId);
+  writePaneState(sidecarPanePath(cwd, sessionId), paneId);
 }
 
 export function getSidecarPaneId(cwd: string, sessionId: string = ""): string | null {
-  const p = sidecarPanePath(cwd, sessionId);
-  if (!existsSync(p)) return null;
-  return readFileSync(p, "utf-8").trim() || null;
+  return readPaneState(sidecarPanePath(cwd, sessionId));
 }
 
 export function saveWorkspacesPaneId(cwd: string, paneId: string): void {
-  writeFileSync(workspacesPanePath(cwd), paneId);
+  writePaneState(workspacesPanePath(cwd), paneId);
 }
 
 export function getWorkspacesPaneId(cwd: string): string | null {
-  const p = workspacesPanePath(cwd);
-  if (!existsSync(p)) return null;
-  return readFileSync(p, "utf-8").trim() || null;
+  return readPaneState(workspacesPanePath(cwd));
 }
 
 export function saveProjectTargetPaneId(cwd: string, paneId: string): void {
-  writeFileSync(projectTargetPanePath(cwd), paneId);
+  writePaneState(projectTargetPanePath(cwd), paneId);
 }
 
 export function getProjectTargetPaneId(cwd: string): string | null {
-  const p = projectTargetPanePath(cwd);
-  if (!existsSync(p)) return null;
-  return readFileSync(p, "utf-8").trim() || null;
+  return readPaneState(projectTargetPanePath(cwd));
 }
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
-type SupportedTerminal = "ghostty" | "unknown";
-
-function detectTerminal(): SupportedTerminal {
-  if (process.env.TERM_PROGRAM === "ghostty") return "ghostty";
-  if (process.env.GHOSTTY_BIN_DIR || process.env.GHOSTTY_RESOURCES_DIR) return "ghostty";
-  return "unknown";
-}
 
 export function isInsideTmux(): boolean {
   return !!process.env.TMUX;
@@ -252,20 +250,15 @@ export function openCommandInNewTerminal(cwd: string, command: string): never {
 // ── tray pane tracking ──────────────────────────────────────────────────────
 
 function trayPanePath(cwd: string, sessionId: string = ""): string {
-  const hash = createHash("sha256").update(cwd + sessionId).digest("hex").slice(0, 12);
-  const dir = join(tmpdir(), "latch");
-  mkdirSync(dir, { recursive: true });
-  return join(dir, `${hash}-tray-pane.txt`);
+  return paneStatePath(cwd + sessionId, "tray-pane");
 }
 
 export function saveTrayPaneId(cwd: string, sessionId: string, paneId: string): void {
-  writeFileSync(trayPanePath(cwd, sessionId), paneId);
+  writePaneState(trayPanePath(cwd, sessionId), paneId);
 }
 
 export function getTrayPaneId(cwd: string, sessionId: string = ""): string | null {
-  const p = trayPanePath(cwd, sessionId);
-  if (!existsSync(p)) return null;
-  return readFileSync(p, "utf-8").trim() || null;
+  return readPaneState(trayPanePath(cwd, sessionId));
 }
 
 // ── sidecar toggle ──────────────────────────────────────────────────────────
@@ -280,7 +273,7 @@ export function focusOrOpenSidecar(cwd: string, sessionId: string = ""): void {
       return;
     } catch {
       // Pane is dead — clean up the stale ID file
-      try { unlinkSync(sidecarPanePath(cwd, sessionId)); } catch {}
+      removePaneState(sidecarPanePath(cwd, sessionId));
     }
   }
   // Open a new sidecar
@@ -332,7 +325,7 @@ export function focusOrOpenWorkspaces(cwd: string): void {
       run(`tmux select-pane -t ${paneId}`);
       return;
     } catch {
-      try { unlinkSync(workspacesPanePath(cwd)); } catch {}
+      removePaneState(workspacesPanePath(cwd));
     }
   }
 
@@ -357,6 +350,6 @@ export function killLatchPanes(cwd: string, sessionId: string = ""): void {
 
   // Clean up pane ID files
   for (const path of [sidecarPanePath(cwd, sessionId), trayPanePath(cwd, sessionId)]) {
-    try { unlinkSync(path); } catch {}
+    removePaneState(path);
   }
 }

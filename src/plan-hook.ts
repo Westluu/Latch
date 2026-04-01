@@ -3,10 +3,9 @@
 // Fires when Claude exits plan mode. Ensures the sidecar is open and sends
 // the plan file path so it switches to the Plans tab.
 
-import { existsSync, appendFileSync, unlinkSync } from "node:fs";
-import { connect } from "node:net";
-import { sendSidecarMessage, getSidecarSocketPath } from "./ipc.js";
-import { splitAndLaunchSidecar, saveSidecarPaneId } from "./tmux.js";
+import { existsSync, appendFileSync } from "node:fs";
+import { sendSidecarMessage } from "./ipc.js";
+import { ensureSidecarReady } from "./sidecar-runtime.js";
 import { sessionIdFromTranscript, planFileFromTranscript } from "./transcript.js";
 
 const LOG = "/tmp/latch-plan-hook.log";
@@ -15,15 +14,6 @@ const dbg = (...args: unknown[]) => {
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-function isSocketAlive(socketPath: string): Promise<boolean> {
-  return new Promise((res) => {
-    const socket = connect(socketPath);
-    const timer = setTimeout(() => { socket.destroy(); res(false); }, 1000);
-    socket.on("connect", () => { clearTimeout(timer); socket.destroy(); res(true); });
-    socket.on("error", () => { clearTimeout(timer); res(false); });
-  });
-}
 
 let input = "";
 const timeout = setTimeout(() => process.exit(0), 10000);
@@ -64,30 +54,7 @@ process.stdin.on("end", async () => {
     }
 
     // Ensure sidecar is running
-    const sidecarSocket = getSidecarSocketPath(cwd, sessionId);
-    let alive = false;
-    if (existsSync(sidecarSocket)) {
-      alive = await isSocketAlive(sidecarSocket);
-      if (!alive) {
-        dbg("removing stale socket");
-        try { unlinkSync(sidecarSocket); } catch {}
-      }
-    }
-
-    if (!alive) {
-      dbg("launching sidecar");
-      try {
-        const paneId = splitAndLaunchSidecar(cwd, sessionId);
-        saveSidecarPaneId(cwd, sessionId, paneId);
-        dbg("sidecar pane:", paneId);
-      } catch (e) {
-        dbg("sidecar launch failed:", e);
-      }
-      for (let i = 0; i < 8; i++) {
-        await sleep(500);
-        if (existsSync(sidecarSocket)) { dbg("socket ready after", i + 1, "attempts"); break; }
-      }
-    }
+    await ensureSidecarReady(cwd, sessionId, dbg);
 
     // Retry send until socket accepts
     for (let i = 0; i < 10; i++) {

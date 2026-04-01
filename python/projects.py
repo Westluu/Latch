@@ -609,9 +609,7 @@ class ProjectsApp(App):
     def _refresh_projects(self) -> None:
         try:
             self._projects = load_projects()
-            self._apply_search_filter()
-            self._render_projects()
-            self._set_status("")
+            self._sync_project_list(clear_status=True)
         except Exception as error:
             self._projects = []
             self._filtered_projects = []
@@ -698,6 +696,19 @@ class ProjectsApp(App):
             if query in project.alias.lower() or query in project.path.lower()
         ]
 
+    def _sync_project_list(
+        self,
+        *,
+        select_alias: Optional[str] = None,
+        clear_status: bool = False,
+    ) -> None:
+        self._apply_search_filter()
+        self._render_projects()
+        if select_alias is not None:
+            self._select_project_alias(select_alias)
+        if clear_status:
+            self._set_status("")
+
     def _clear_delete_confirmation(self) -> None:
         self._pending_delete_alias = None
 
@@ -730,9 +741,7 @@ class ProjectsApp(App):
             return
 
         self._clear_delete_confirmation()
-        self._apply_search_filter()
-        self._render_projects()
-        self._set_status("")
+        self._sync_project_list(clear_status=True)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "search-input":
@@ -775,9 +784,7 @@ class ProjectsApp(App):
         self._refresh_projects()
         search_input = self.query_one("#search-input", Input)
         search_input.value = ""
-        self._apply_search_filter()
-        self._render_projects()
-        self._select_project_alias(alias)
+        self._sync_project_list(select_alias=alias)
         self.query_one("#projects-list", ListView).focus()
         self._set_status(result.stdout.strip() or f'Saved project "{alias}".')
 

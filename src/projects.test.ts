@@ -27,6 +27,7 @@ import {
   removeProject,
   validateProjectAlias,
 } from "./projects.js";
+import { detectTerminal } from "./terminal.js";
 
 function withTempDir(fn: (dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "latch-projects-test-"));
@@ -76,6 +77,20 @@ test("getProjectsConfigPath falls back to ~/.config", () => {
   assert.equal(
     getProjectsConfigPath({}),
     join(homedir(), ".config", "latch", "projects.json")
+  );
+});
+
+test("detectTerminal prefers explicit override", () => {
+  assert.equal(
+    detectTerminal({ LATCH_TERMINAL: "kitty", TERM_PROGRAM: "ghostty" }),
+    "kitty"
+  );
+});
+
+test("detectTerminal recognizes ghostty-specific environment variables", () => {
+  assert.equal(
+    detectTerminal({ GHOSTTY_RESOURCES_DIR: "/Applications/Ghostty.app/Contents/Resources" }),
+    "ghostty"
   );
 });
 

@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from "
 import { execSync, spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { homedir, tmpdir } from "node:os";
+import { detectTerminal } from "./terminal.js";
 
 const SETTINGS_PATH = join(homedir(), ".claude", "settings.json");
 const HOOK_MARKER = "latch-hook";
@@ -94,33 +95,6 @@ function hasLatchPlanHook(settings: any): boolean {
   return postToolUse.some(
     (entry: any) => entry.hooks?.some((h: any) => h.command?.includes("plan-hook"))
   );
-}
-
-// ── terminal detection ───────────────────────────────────────────────────────
-
-type SupportedTerminal = "ghostty" | "iterm2" | "kitty" | "apple_terminal" | "unknown";
-
-function detectTerminal(): SupportedTerminal {
-  const override = (process.env.LATCH_TERMINAL || "").toLowerCase();
-  if (
-    override === "ghostty" ||
-    override === "iterm2" ||
-    override === "kitty" ||
-    override === "apple_terminal"
-  ) {
-    return override;
-  }
-
-  // Ghostty can be identified by TERM_PROGRAM, but in some launch paths only
-  // Ghostty-specific env vars are present.
-  if (process.env.TERM_PROGRAM === "ghostty") return "ghostty";
-  if (process.env.GHOSTTY_BIN_DIR || process.env.GHOSTTY_RESOURCES_DIR) return "ghostty";
-
-  if (process.env.TERM_PROGRAM === "iTerm.app" || process.env.ITERM_SESSION_ID) return "iterm2";
-  if (process.env.TERM_PROGRAM === "Apple_Terminal") return "apple_terminal";
-
-  if (process.env.KITTY_WINDOW_ID || process.env.TERM === "xterm-kitty") return "kitty";
-  return "unknown";
 }
 
 function terminalDebugContext(): string {
