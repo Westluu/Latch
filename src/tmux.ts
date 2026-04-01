@@ -26,16 +26,33 @@ function removePaneState(path: string): void {
   try { unlinkSync(path); } catch {}
 }
 
+function sidecarStateScope(cwd: string, sessionId: string = ""): string {
+  if (sessionId) return `${cwd}:${sessionId}`;
+  const currentWindow = getCurrentTmuxWindowId();
+  if (currentWindow) return `tmux-window:${currentWindow}`;
+  const currentSession = getCurrentTmuxSession();
+  return currentSession ? `tmux-session:${currentSession}` : cwd;
+}
+
+function workspacesStateScope(cwd: string): string {
+  const currentWindow = getCurrentTmuxWindowId();
+  return currentWindow ? `tmux-window:${currentWindow}` : cwd;
+}
+
 function sidecarPanePath(cwd: string, sessionId: string = ""): string {
-  return paneStatePath(cwd + sessionId, "sidecar-pane");
+  return paneStatePath(sidecarStateScope(cwd, sessionId), "sidecar-pane");
 }
 
 function workspacesPanePath(cwd: string): string {
-  return paneStatePath(`${cwd}:workspaces`, "workspaces-pane");
+  return paneStatePath(`${workspacesStateScope(cwd)}:workspaces`, "workspaces-pane");
 }
 
 function projectTargetPanePath(cwd: string): string {
   return paneStatePath(`${cwd}:project-target`, "project-target-pane");
+}
+
+function sidecarTargetPanePath(cwd: string, sessionId: string = ""): string {
+  return paneStatePath(`${sidecarStateScope(cwd, sessionId)}:sidecar-target`, "sidecar-target-pane");
 }
 
 export function saveSidecarPaneId(cwd: string, sessionId: string, paneId: string): void {
@@ -60,6 +77,14 @@ export function saveProjectTargetPaneId(cwd: string, paneId: string): void {
 
 export function getProjectTargetPaneId(cwd: string): string | null {
   return readPaneState(projectTargetPanePath(cwd));
+}
+
+export function saveSidecarTargetPaneId(cwd: string, sessionId: string, paneId: string): void {
+  writePaneState(sidecarTargetPanePath(cwd, sessionId), paneId);
+}
+
+export function getSidecarTargetPaneId(cwd: string, sessionId: string = ""): string | null {
+  return readPaneState(sidecarTargetPanePath(cwd, sessionId));
 }
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -116,6 +141,15 @@ export function getCurrentTmuxSession(): string {
   }
 }
 
+/** Returns the tmux window id of the current process context, or "" on failure. */
+export function getCurrentTmuxWindowId(): string {
+  try {
+    return run("tmux display-message -p '#{window_id}'");
+  } catch {
+    return "";
+  }
+}
+
 /** Returns the pane id of the current process context, or "" on failure. */
 export function getCurrentPaneId(): string {
   try {
@@ -153,10 +187,15 @@ function sidecarCommand(cwd: string, sessionId: string = ""): string {
 
 export function splitAndLaunchSidecar(cwd: string, sessionId: string = ""): string {
   ensurePythonUiDependencies();
+  const targetPane = getCurrentPaneId();
+  if (targetPane) {
+    saveSidecarTargetPaneId(cwd, sessionId, targetPane);
+  }
+  const targetFlag = targetPane ? ` -t ${targetPane}` : "";
   const paneId = run(
-    `tmux split-window -h -l 40% -P -F '#{pane_id}' -c '${cwd}' '${sidecarCommand(cwd, sessionId)}'`
+    `tmux split-window -h -l 40% -P -F '#{pane_id}'${targetFlag} -c '${cwd}' '${sidecarCommand(cwd, sessionId)}'`
   );
-  run("tmux select-pane -L");
+  run(`tmux select-pane -t ${paneId}`);
   return paneId;
 }
 
@@ -167,6 +206,8 @@ export function launchNewSession(cwd: string, sessionId: string = ""): void {
   run(
     `tmux split-window -h -l 40% -t ${sessionName} -c '${cwd}' '${sidecarCommand(cwd, sessionId)}'`
   );
+  const targetPane = run(`tmux display-message -t ${sessionName}:.0 -p '#{pane_id}'`);
+  if (targetPane) saveSidecarTargetPaneId(cwd, sessionId, targetPane);
   run(`tmux select-pane -t ${sessionName}:.0`);
 
   const attach = spawn("tmux", ["attach-session", "-t", sessionName], {
@@ -182,6 +223,8 @@ function uniqueSessionName(): string {
 
 export function launchWithAgent(cwd: string, agentCommand: string): never {
   if (isInsideTmux()) {
+    const currentPane = getCurrentPaneId();
+    if (currentPane) saveSidecarTargetPaneId(cwd, "", currentPane);
     // Already in tmux — run the agent in the current pane and block
     const result = spawnSync(agentCommand, [], {
       cwd,
@@ -221,6 +264,8 @@ export function openAgentInTargetPane(originCwd: string, projectCwd: string, age
   if (!targetPane) {
     launchWithAgent(projectCwd, agentCommand);
   }
+
+  saveSidecarTargetPaneId(originCwd, "", targetPane);
 
   const loadingPy = join(__dirname, "..", "python", "loading.py");
   run(`tmux respawn-pane -k -t ${targetPane} -c '${projectCwd}' 'python3 "${loadingPy}" "${agentCommand}"'`);
@@ -293,6 +338,7 @@ export function getTrayPaneId(cwd: string, sessionId: string = ""): string | nul
 // ── sidecar toggle ──────────────────────────────────────────────────────────
 
 export function focusOrOpenSidecar(cwd: string, sessionId: string = ""): void {
+  const currentPane = getCurrentPaneId();
   const paneId = getSidecarPaneId(cwd, sessionId);
   if (paneId) {
     try {
@@ -305,8 +351,23 @@ export function focusOrOpenSidecar(cwd: string, sessionId: string = ""): void {
       removePaneState(sidecarPanePath(cwd, sessionId));
     }
   }
-  // Open a new sidecar
-  const newPaneId = splitAndLaunchSidecar(cwd, sessionId);
+
+  const savedTargetPane = getSidecarTargetPaneId(cwd, sessionId);
+  const targetPane =
+    savedTargetPane && isPaneInCurrentSession(savedTargetPane)
+      ? savedTargetPane
+      : currentPane;
+
+  if (targetPane) {
+    saveSidecarTargetPaneId(cwd, sessionId, targetPane);
+  }
+
+  const targetFlag = targetPane ? ` -t ${targetPane}` : "";
+  ensurePythonUiDependencies();
+  const newPaneId = run(
+    `tmux split-window -h -l 40% -P -F '#{pane_id}'${targetFlag} -c '${cwd}' '${sidecarCommand(cwd, sessionId)}'`
+  );
+  run(`tmux select-pane -t ${newPaneId}`);
   saveSidecarPaneId(cwd, sessionId, newPaneId);
 }
 
@@ -339,17 +400,27 @@ export function openProjectsPopup(cwd: string): void {
   );
 }
 
-export function splitAndLaunchWorkspaces(cwd: string): string {
+function resolveClaudeTargetPane(cwd: string, currentPane: string): string {
+  const savedTargetPane = getSidecarTargetPaneId(cwd, "");
+  if (savedTargetPane && isPaneInCurrentSession(savedTargetPane)) {
+    return savedTargetPane;
+  }
+  return currentPane;
+}
+
+export function splitAndLaunchWorkspaces(cwd: string, targetPane: string = ""): string {
+  const targetFlag = targetPane ? ` -t ${targetPane}` : "";
   return run(
-    `tmux split-window -h -b -l 30% -P -F '#{pane_id}' -c '${cwd}' '${projectsCommand(cwd)}'`
+    `tmux split-window -h -b -l 30% -P -F '#{pane_id}'${targetFlag} -c '${cwd}' '${projectsCommand(cwd)}'`
   );
 }
 
 export function focusOrOpenWorkspaces(cwd: string): void {
   const currentPane = getCurrentPaneId();
+  const targetPane = resolveClaudeTargetPane(cwd, currentPane);
   const paneId = getWorkspacesPaneId(cwd);
   if (paneId) {
-    if (currentPane && currentPane !== paneId) saveProjectTargetPaneId(cwd, currentPane);
+    if (targetPane && targetPane !== paneId) saveProjectTargetPaneId(cwd, targetPane);
     try {
       run(`tmux display-message -t ${paneId} -p ''`);
       run(`tmux select-pane -t ${paneId}`);
@@ -359,8 +430,8 @@ export function focusOrOpenWorkspaces(cwd: string): void {
     }
   }
 
-  if (currentPane) saveProjectTargetPaneId(cwd, currentPane);
-  const newPaneId = splitAndLaunchWorkspaces(cwd);
+  if (targetPane) saveProjectTargetPaneId(cwd, targetPane);
+  const newPaneId = splitAndLaunchWorkspaces(cwd, targetPane);
   saveWorkspacesPaneId(cwd, newPaneId);
 }
 
@@ -379,7 +450,7 @@ export function killLatchPanes(cwd: string, sessionId: string = ""): void {
   }
 
   // Clean up pane ID files
-  for (const path of [sidecarPanePath(cwd, sessionId), trayPanePath(cwd, sessionId)]) {
+  for (const path of [sidecarPanePath(cwd, sessionId), trayPanePath(cwd, sessionId), sidecarTargetPanePath(cwd, sessionId)]) {
     removePaneState(path);
   }
 }
