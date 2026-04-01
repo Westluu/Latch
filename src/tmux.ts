@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { detectTerminal } from "./terminal.js";
+import { detectTerminal } from "./terminals/index.js";
 
 function paneStatePath(hashKey: string, suffix: string): string {
   const hash = createHash("sha256").update(hashKey).digest("hex").slice(0, 12);

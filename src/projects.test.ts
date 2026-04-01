@@ -27,7 +27,7 @@ import {
   removeProject,
   validateProjectAlias,
 } from "./projects.js";
-import { detectTerminal } from "./terminal.js";
+import { detectTerminal } from "./terminals/index.js";
 
 function withTempDir(fn: (dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "latch-projects-test-"));
