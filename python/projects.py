@@ -13,7 +13,7 @@ import json
 import os
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
 from textual.app import App, ComposeResult
@@ -24,12 +24,25 @@ from textual.widgets import Footer, Header, Input, ListItem, ListView, Static
 
 
 @dataclass
+class WorkspaceInfo:
+    name: str
+    path: str
+    kind: str
+    branch: str | None
+    is_default: bool
+    last_opened_at: str | None
+
+
+@dataclass
 class ProjectInfo:
     alias: str
+    root_path: str
     path: str
     created_at: str
     updated_at: str
     last_opened_at: str | None
+    default_workspace: str = "default"
+    workspaces: list[WorkspaceInfo] = field(default_factory=list)
 
 
 def get_projects_config_path() -> str:
@@ -47,16 +60,67 @@ def load_projects() -> list[ProjectInfo]:
     with open(config_path) as f:
         data = json.load(f)
 
+    version = data.get("version", 1)
     projects = data.get("projects", {})
     items: list[ProjectInfo] = []
     for alias, project in projects.items():
+        if version >= 2:
+            default_workspace = project.get("defaultWorkspace", "default")
+            workspaces = project.get("workspaces", {})
+            workspace = workspaces.get(default_workspace)
+            if not isinstance(workspace, dict):
+                continue
+            project_path = workspace.get("path")
+            root_path = project.get("rootPath", project_path)
+            last_opened_at = project.get("lastOpenedAt")
+            workspace_items: list[WorkspaceInfo] = []
+            for workspace_name, workspace_info in sorted(workspaces.items()):
+                if not isinstance(workspace_info, dict):
+                    continue
+                workspace_path = workspace_info.get("path")
+                if not isinstance(workspace_path, str):
+                    continue
+                workspace_items.append(
+                    WorkspaceInfo(
+                        name=workspace_name,
+                        path=workspace_path,
+                        kind=workspace_info.get("kind", "worktree"),
+                        branch=workspace_info.get("branch"),
+                        is_default=workspace_name == default_workspace,
+                        last_opened_at=workspace_info.get("lastOpenedAt"),
+                    )
+                )
+        else:
+            project_path = project.get("path")
+            root_path = project_path
+            last_opened_at = project.get("lastOpenedAt")
+            default_workspace = "default"
+            if not isinstance(project_path, str):
+                continue
+            workspace_items = [
+                WorkspaceInfo(
+                    name=default_workspace,
+                    path=project_path,
+                    kind="root",
+                    branch=None,
+                    is_default=True,
+                    last_opened_at=last_opened_at,
+                )
+            ]
+
+        if not isinstance(project_path, str):
+            continue
+
         items.append(
             ProjectInfo(
                 alias=alias,
-                path=project["path"],
+                root_path=root_path,
+                path=project_path,
                 created_at=project["createdAt"],
                 updated_at=project["updatedAt"],
-                last_opened_at=project["lastOpenedAt"],
+                last_opened_at=last_opened_at,
+                default_workspace=default_workspace,
+                workspaces=workspace_items,
             )
         )
     items.sort(key=lambda project: project.alias.lower())
@@ -77,8 +141,33 @@ class ProjectListItem(ListItem):
         self.project = project
         self._icon = Static(">", classes="project-icon")
         self._alias = Static(project.alias, classes="project-alias")
-        self._path = Static(shorten_path(project.path, 68), classes="project-path")
-        self._content = Vertical(self._alias, self._path, classes="project-content")
+        workspace_count = len(project.workspaces)
+        count_label = "workspace" if workspace_count == 1 else "workspaces"
+        self._path = Static(shorten_path(project.root_path, 68), classes="project-path")
+        self._meta = Static(f"{workspace_count} {count_label}", classes="project-meta")
+        self._content = Vertical(self._alias, self._meta, self._path, classes="project-content")
+        self._row = Horizontal(self._icon, self._content, classes="project-row")
+
+    def compose(self) -> ComposeResult:
+        yield self._row
+
+    def set_selected(self, selected: bool) -> None:
+        self._row.set_class(selected, "-selected")
+
+
+class WorkspaceListItem(ListItem):
+    def __init__(self, workspace: WorkspaceInfo) -> None:
+        super().__init__()
+        self.workspace = workspace
+        self._icon = Static(">", classes="project-icon")
+        label = workspace.name + (" *" if workspace.is_default else "")
+        self._alias = Static(label, classes="project-alias")
+        details = workspace.kind
+        if workspace.branch:
+            details = f"{details}  {workspace.branch}"
+        self._meta = Static(details, classes="project-meta")
+        self._path = Static(shorten_path(workspace.path, 68), classes="project-path")
+        self._content = Vertical(self._alias, self._meta, self._path, classes="project-content")
         self._row = Horizontal(self._icon, self._content, classes="project-row")
 
     def compose(self) -> ComposeResult:
@@ -555,8 +644,18 @@ ListView > ListItem {
     height: auto;
 }
 
+.project-meta {
+    color: #64748B;
+    padding: 0;
+    height: auto;
+}
+
 .project-row.-selected .project-alias {
     color: #F8FAFC;
+}
+
+.project-row.-selected .project-meta {
+    color: #A5B4FC;
 }
 
 .project-row.-selected .project-path {
@@ -575,6 +674,8 @@ class ProjectsApp(App):
         Binding("k,up", "cursor_up", "Up"),
         Binding("enter", "open_selected", "Open"),
         Binding("ctrl+t,t", "open_selected_in_tab", "Open in Tab", show=False, priority=True),
+        Binding("right,l", "view_workspaces", "Workspaces", show=False, priority=True),
+        Binding("left,h,backspace", "back", "Back", show=False, priority=True),
         Binding("slash", "focus_search", "Search", show=False),
         Binding("a", "start_add", "Add"),
         Binding("d", "delete_selected", "Delete"),
@@ -586,8 +687,12 @@ class ProjectsApp(App):
         self.cwd = cwd
         self._projects: list[ProjectInfo] = []
         self._filtered_projects: list[ProjectInfo] = []
-        self._items: list[ProjectListItem] = []
+        self._workspaces: list[WorkspaceInfo] = []
+        self._filtered_workspaces: list[WorkspaceInfo] = []
+        self._items: list[ListItem] = []
         self._pending_delete_alias: str | None = None
+        self._mode = "projects"
+        self._active_project_alias: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -600,20 +705,47 @@ class ProjectsApp(App):
 
     def on_mount(self) -> None:
         self.title = "LATCH / WORKSPACES"
+        self._update_subtitle()
         self._refresh_projects()
         if self._projects:
             self.query_one("#projects-list", ListView).focus()
         else:
             self.query_one("#search-input", Input).focus()
 
+    def _update_subtitle(self) -> None:
+        if self._mode == "workspaces":
+            alias = self._active_project_alias or "Project"
+            self.sub_title = f"{alias} / Workspaces"
+        else:
+            self.sub_title = "Projects"
+
+    def _active_project(self) -> ProjectInfo | None:
+        if self._active_project_alias is None:
+            return None
+        for project in self._projects:
+            if project.alias == self._active_project_alias:
+                return project
+        return None
+
     def _refresh_projects(self) -> None:
         try:
             self._projects = load_projects()
-            self._sync_project_list(clear_status=True)
+            if self._mode == "workspaces":
+                active_project = self._active_project()
+                if active_project is None:
+                    self._mode = "projects"
+                    self._active_project_alias = None
+                    self._workspaces = []
+                    self._filtered_workspaces = []
+                else:
+                    self._workspaces = active_project.workspaces
+            self._sync_list(clear_status=True)
         except Exception as error:
             self._projects = []
             self._filtered_projects = []
-            self._render_projects()
+            self._workspaces = []
+            self._filtered_workspaces = []
+            self._render_current_list()
             self._set_status(f"Could not load projects: {error}")
 
     def _render_projects(self) -> None:
@@ -640,6 +772,38 @@ class ProjectsApp(App):
         else:
             self._set_selected_index(None)
 
+    def _render_workspaces(self) -> None:
+        list_view = self.query_one("#projects-list", ListView)
+        list_view.clear()
+        self._items = []
+
+        for workspace in self._filtered_workspaces:
+            item = WorkspaceListItem(workspace)
+            self._items.append(item)
+            list_view.append(item)
+
+        empty = self.query_one("#empty-state", Static)
+        active_project = self._active_project()
+        if self._workspaces and not self._filtered_workspaces:
+            empty.update("No workspaces match the current search.")
+        elif active_project is not None and not self._workspaces:
+            empty.update(f'No workspaces for "{active_project.alias}" yet.')
+        else:
+            empty.update("")
+
+        if self._filtered_workspaces:
+            list_view.index = 0
+            self._set_selected_index(0)
+        else:
+            self._set_selected_index(None)
+
+    def _render_current_list(self) -> None:
+        self._update_subtitle()
+        if self._mode == "workspaces":
+            self._render_workspaces()
+        else:
+            self._render_projects()
+
     def _set_selected_index(self, index: int | None) -> None:
         for item_index, item in enumerate(self._items):
             item.set_selected(index is not None and item_index == index)
@@ -656,10 +820,24 @@ class ProjectsApp(App):
                 self._set_selected_index(index)
                 return
 
+    def _select_workspace_name(self, workspace_name: str) -> None:
+        if not self._filtered_workspaces:
+            self._set_selected_index(None)
+            return
+
+        list_view = self.query_one("#projects-list", ListView)
+        for index, workspace in enumerate(self._filtered_workspaces):
+            if workspace.name == workspace_name:
+                list_view.index = index
+                self._set_selected_index(index)
+                return
+
     def _set_status(self, message: str) -> None:
         self.query_one("#status", Static).update(message)
 
     def _selected_project(self) -> ProjectInfo | None:
+        if self._mode != "projects":
+            return None
         list_view = self.query_one("#projects-list", ListView)
         if not self._filtered_projects:
             return None
@@ -667,6 +845,17 @@ class ProjectsApp(App):
         if index < 0 or index >= len(self._filtered_projects):
             return None
         return self._filtered_projects[index]
+
+    def _selected_workspace(self) -> WorkspaceInfo | None:
+        if self._mode != "workspaces":
+            return None
+        list_view = self.query_one("#projects-list", ListView)
+        if not self._filtered_workspaces:
+            return None
+        index = list_view.index or 0
+        if index < 0 or index >= len(self._filtered_workspaces):
+            return None
+        return self._filtered_workspaces[index]
 
     def _cli_path(self) -> str:
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -687,25 +876,42 @@ class ProjectsApp(App):
 
     def _apply_search_filter(self) -> None:
         query = self.query_one("#search-input", Input).value.strip().lower()
+        if self._mode == "workspaces":
+            if not query:
+                self._filtered_workspaces = self._workspaces
+                return
+
+            self._filtered_workspaces = [
+                workspace for workspace in self._workspaces
+                if query in workspace.name.lower()
+                or query in workspace.path.lower()
+                or query in workspace.kind.lower()
+                or (workspace.branch is not None and query in workspace.branch.lower())
+            ]
+            return
+
         if not query:
             self._filtered_projects = self._projects
             return
 
         self._filtered_projects = [
             project for project in self._projects
-            if query in project.alias.lower() or query in project.path.lower()
+            if query in project.alias.lower() or query in project.root_path.lower()
         ]
 
-    def _sync_project_list(
+    def _sync_list(
         self,
         *,
         select_alias: Optional[str] = None,
+        select_workspace: Optional[str] = None,
         clear_status: bool = False,
     ) -> None:
         self._apply_search_filter()
-        self._render_projects()
-        if select_alias is not None:
+        self._render_current_list()
+        if self._mode == "projects" and select_alias is not None:
             self._select_project_alias(select_alias)
+        if self._mode == "workspaces" and select_workspace is not None:
+            self._select_workspace_name(select_workspace)
         if clear_status:
             self._set_status("")
 
@@ -727,21 +933,52 @@ class ProjectsApp(App):
             self._set_status("Delete canceled.")
             return
 
+        if self._mode == "workspaces":
+            self.action_back()
+            return
+
         self.exit()
+
+    def action_back(self) -> None:
+        if self._mode != "workspaces":
+            self.exit()
+            return
+
+        active_alias = self._active_project_alias
+        self._mode = "projects"
+        self._active_project_alias = None
+        self._workspaces = []
+        self._filtered_workspaces = []
+        self._sync_list(select_alias=active_alias, clear_status=True)
+        self.query_one("#projects-list", ListView).focus()
 
     def action_focus_search(self) -> None:
         self.query_one("#search-input", Input).focus()
 
     def action_start_add(self) -> None:
+        if self._mode != "projects":
+            self._set_status("Add project is only available from the project list.")
+            return
         self._clear_delete_confirmation()
         self.push_screen(AddWorkspaceModal(self.cwd), self._after_add_modal)
+
+    def action_view_workspaces(self) -> None:
+        project = self._selected_project()
+        if not project:
+            return
+
+        self._mode = "workspaces"
+        self._active_project_alias = project.alias
+        self._workspaces = project.workspaces
+        self._sync_list(clear_status=True)
+        self.query_one("#projects-list", ListView).focus()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "search-input":
             return
 
         self._clear_delete_confirmation()
-        self._sync_project_list(clear_status=True)
+        self._sync_list(clear_status=True)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "search-input":
@@ -758,11 +995,11 @@ class ProjectsApp(App):
         self._set_selected_index(event.list_view.index)
 
     def action_cursor_down(self) -> None:
-        if self._filtered_projects:
+        if (self._mode == "projects" and self._filtered_projects) or (self._mode == "workspaces" and self._filtered_workspaces):
             self.query_one("#projects-list", ListView).action_cursor_down()
 
     def action_cursor_up(self) -> None:
-        if self._filtered_projects:
+        if (self._mode == "projects" and self._filtered_projects) or (self._mode == "workspaces" and self._filtered_workspaces):
             self.query_one("#projects-list", ListView).action_cursor_up()
 
     def action_refresh(self) -> None:
@@ -784,11 +1021,15 @@ class ProjectsApp(App):
         self._refresh_projects()
         search_input = self.query_one("#search-input", Input)
         search_input.value = ""
-        self._sync_project_list(select_alias=alias)
+        self._sync_list(select_alias=alias)
         self.query_one("#projects-list", ListView).focus()
         self._set_status(result.stdout.strip() or f'Saved project "{alias}".')
 
     def action_delete_selected(self) -> None:
+        if self._mode != "projects":
+            self._set_status("Workspace removal is available through the CLI for now.")
+            return
+
         project = self._selected_project()
         if not project:
             self._set_status("No project selected.")
@@ -811,6 +1052,20 @@ class ProjectsApp(App):
         self._set_status(result.stdout.strip() or f'Removed project "{project.alias}".')
 
     def action_open_selected(self) -> None:
+        if self._mode == "workspaces":
+            project = self._active_project()
+            workspace = self._selected_workspace()
+            if project is None or workspace is None:
+                return
+            result = self._run_cli(["workspace", "open", project.alias, workspace.name, "--current-session"])
+            if result is None:
+                return
+            if result.returncode != 0:
+                self._set_status(result.stderr.strip() or result.stdout.strip() or "Could not open workspace.")
+                return
+            self.exit()
+            return
+
         project = self._selected_project()
         if not project:
             return
@@ -824,6 +1079,20 @@ class ProjectsApp(App):
         self.exit()
 
     def action_open_selected_in_tab(self) -> None:
+        if self._mode == "workspaces":
+            project = self._active_project()
+            workspace = self._selected_workspace()
+            if project is None or workspace is None:
+                return
+            result = self._run_cli(["workspace", "open", project.alias, workspace.name, "--tab"])
+            if result is None:
+                return
+            if result.returncode != 0:
+                self._set_status(result.stderr.strip() or result.stdout.strip() or "Could not open workspace in a new tab.")
+                return
+            self.exit()
+            return
+
         project = self._selected_project()
         if not project:
             return

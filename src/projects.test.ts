@@ -19,12 +19,16 @@ import { fileURLToPath } from "node:url";
 import {
   addCurrentProject,
   addProject,
+  addWorkspace,
+  createWorktreeWorkspace,
   getProject,
+  getProjectPath,
   getProjectsConfigPath,
   listProjects,
   markProjectOpened,
   readProjectsRegistry,
   removeProject,
+  removeWorkspace,
   validateProjectAlias,
 } from "./projects.js";
 import { detectTerminal } from "./terminals/index.js";
@@ -66,6 +70,31 @@ function runCli(
   });
 }
 
+function runGit(
+  args: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env
+): string {
+  const result = spawnSync("git", args, {
+    cwd,
+    env,
+    encoding: "utf-8",
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  return result.stdout.trim();
+}
+
+function initGitRepo(repoPath: string): void {
+  mkdirSync(repoPath, { recursive: true });
+  runGit(["init"], repoPath);
+  runGit(["config", "user.name", "Latch Tests"], repoPath);
+  runGit(["config", "user.email", "latch@example.com"], repoPath);
+  writeFileSync(join(repoPath, "README.md"), "# test\n");
+  runGit(["add", "README.md"], repoPath);
+  runGit(["commit", "-m", "init"], repoPath);
+}
+
 test("getProjectsConfigPath uses XDG_CONFIG_HOME when provided", () => {
   assert.equal(
     getProjectsConfigPath({ XDG_CONFIG_HOME: "/tmp/latch-xdg" }),
@@ -97,7 +126,78 @@ test("detectTerminal recognizes ghostty-specific environment variables", () => {
 test("readProjectsRegistry returns an empty registry when config is missing", () => {
   withTempDir((dir) => {
     const registry = readProjectsRegistry(configPathFor(dir));
-    assert.deepEqual(registry, { version: 1, projects: {} });
+    assert.deepEqual(registry, { version: 2, projects: {} });
+  });
+});
+
+test("readProjectsRegistry migrates v1 config to the v2 project/workspace shape", () => {
+  withTempDir((dir) => {
+    const configPath = configPathFor(dir);
+    const projectPath = projectFixturePath(dir, "frontend");
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        projects: {
+          frontend: {
+            path: projectPath,
+            createdAt: "2026-03-31T18:00:00.000Z",
+            updatedAt: "2026-03-31T18:00:00.000Z",
+            lastOpenedAt: null,
+          },
+        },
+      }, null, 2) + "\n"
+    );
+
+    const registry = readProjectsRegistry(configPath);
+    const project = registry.projects.frontend;
+
+    assert.equal(registry.version, 2);
+    assert.ok(project);
+    assert.equal(realpathSync(project.rootPath), realpathSync(projectPath));
+    assert.equal(project.defaultWorkspace, "default");
+    assert.equal(realpathSync(project.workspaces.default.path), realpathSync(projectPath));
+    assert.equal(project.workspaces.default.kind, "root");
+  });
+});
+
+test("readProjectsRegistry accepts v2 workspaces without explicit branch or workspace lastOpenedAt", () => {
+  withTempDir((dir) => {
+    const configPath = configPathFor(dir);
+    const projectPath = projectFixturePath(dir, "frontend");
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 2,
+        projects: {
+          frontend: {
+            rootPath: projectPath,
+            createdAt: "2026-03-31T18:00:00.000Z",
+            updatedAt: "2026-03-31T18:00:00.000Z",
+            lastOpenedAt: null,
+            defaultWorkspace: "root",
+            workspaces: {
+              root: {
+                path: projectPath,
+                kind: "root",
+                createdAt: "2026-03-31T18:00:00.000Z",
+                updatedAt: "2026-03-31T18:00:00.000Z",
+              },
+            },
+          },
+        },
+      }, null, 2) + "\n"
+    );
+
+    const registry = readProjectsRegistry(configPath);
+    const workspace = registry.projects.frontend.workspaces.root;
+
+    assert.equal(realpathSync(workspace.path), realpathSync(projectPath));
+    assert.equal(workspace.kind, "root");
+    assert.equal(workspace.branch, null);
+    assert.equal(workspace.lastOpenedAt, null);
   });
 });
 
@@ -142,7 +242,7 @@ test("addProject normalizes relative paths using cwd", () => {
     const configPath = configPathFor(dir);
 
     const project = addProject("repo", ".", { cwd: repoPath, configPath });
-    assert.equal(project.path, realpathSync(repoPath));
+    assert.equal(getProjectPath(project), realpathSync(repoPath));
   });
 });
 
@@ -152,7 +252,7 @@ test("addCurrentProject stores the current directory", () => {
     const configPath = configPathFor(dir);
 
     const project = addCurrentProject("backend", { cwd: repoPath, configPath });
-    assert.equal(project.path, realpathSync(repoPath));
+    assert.equal(getProjectPath(project), realpathSync(repoPath));
   });
 });
 
@@ -192,6 +292,41 @@ test("addProject rejects duplicate aliases and duplicate paths", () => {
   });
 });
 
+test("createWorktreeWorkspace creates a git worktree under the project", () => {
+  withTempDir((dir) => {
+    const repoPath = join(dir, "repo");
+    const configPath = configPathFor(dir);
+    initGitRepo(repoPath);
+
+    addProject("repo", repoPath, { configPath });
+    const workspace = createWorktreeWorkspace("repo", "feature-one", { configPath });
+
+    assert.ok(existsSync(workspace.path));
+    assert.equal(runGit(["branch", "--show-current"], workspace.path), "feature-one");
+    assert.equal(workspace.kind, "worktree");
+  });
+});
+
+test("removeWorkspace removes a worktree workspace from git and config", () => {
+  withTempDir((dir) => {
+    const repoPath = join(dir, "repo");
+    const configPath = configPathFor(dir);
+    initGitRepo(repoPath);
+
+    addProject("repo", repoPath, { configPath });
+    const workspace = createWorktreeWorkspace("repo", "feature-one", { configPath });
+    assert.ok(existsSync(workspace.path));
+
+    const removed = removeWorkspace("repo", "feature-one", { configPath });
+    assert.equal(removed.path, workspace.path);
+    assert.equal(existsSync(workspace.path), false);
+
+    const project = getProject("repo", configPath);
+    assert.ok(project);
+    assert.equal(project.workspaces["feature-one"], undefined);
+  });
+});
+
 test("listProjects sorts aliases alphabetically and removeProject deletes only that alias", () => {
   withTempDir((dir) => {
     const configPath = configPathFor(dir);
@@ -204,7 +339,7 @@ test("listProjects sorts aliases alphabetically and removeProject deletes only t
     );
 
     const removed = removeProject("backend", configPath);
-    assert.equal(removed.path.endsWith("/backend"), true);
+    assert.equal(getProjectPath(removed).endsWith("/backend"), true);
     assert.equal(getProject("backend", configPath), null);
     assert.ok(getProject("frontend", configPath));
   });
@@ -242,6 +377,172 @@ test("cli project list works for empty and populated registries", () => {
     assert.equal(listed.status, 0);
     assert.match(listed.stdout, /frontend/);
     assert.match(listed.stdout, new RegExp(repoPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  });
+});
+
+test("cli workspace list shows the default workspace for each project", () => {
+  withTempDir((dir) => {
+    const env = { ...process.env, XDG_CONFIG_HOME: dir };
+    const repoPath = projectFixturePath(dir, "frontend");
+
+    assert.equal(runCli(["project", "add", repoPath, "frontend"], { env }).status, 0);
+
+    const listed = runCli(["workspace", "list"], { env });
+    assert.equal(listed.status, 0);
+    assert.match(listed.stdout, /frontend/);
+    assert.match(listed.stdout, /default\*/);
+    assert.match(listed.stdout, new RegExp(repoPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  });
+});
+
+test("cli workspace open --current-session respawns the stored target pane for that workspace", () => {
+  withTempDir((dir) => {
+    const configHome = join(dir, "config");
+    const binDir = join(dir, "bin");
+    const tmpRoot = join(dir, "tmp");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(tmpRoot, { recursive: true });
+
+    const tmuxLog = join(dir, "tmux.log");
+    const tmuxStub = join(binDir, "tmux");
+    writeFileSync(
+      tmuxStub,
+      "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$LATCH_TMUX_LOG\"\nif [ \"$1\" = \"display-message\" ] && [ \"$4\" = '#{pane_id}' ]; then printf '%s\\n' '%%main'; fi\nexit 0\n"
+    );
+    chmodSync(tmuxStub, 0o755);
+
+    const projectPath = projectFixturePath(dir, "frontend");
+    const workspacePath = projectFixturePath(projectPath, ".latch/workspaces/feature-one");
+    addProject("frontend", projectPath, { configPath: configPathFor(configHome) });
+    addWorkspace("frontend", "feature-one", workspacePath, { configPath: configPathFor(configHome) });
+
+    const repoCwd = realpathSync(process.cwd());
+    const targetHash = createHash("sha256").update(`${repoCwd}:project-target`).digest("hex").slice(0, 12);
+    const latchTmp = join(tmpRoot, "latch");
+    mkdirSync(latchTmp, { recursive: true });
+    writeFileSync(join(latchTmp, `${targetHash}-project-target-pane.txt`), "%target");
+
+    const env = {
+      ...process.env,
+      TMUX: "1",
+      TMPDIR: tmpRoot,
+      XDG_CONFIG_HOME: configHome,
+      TERM_PROGRAM: "",
+      GHOSTTY_BIN_DIR: "",
+      GHOSTTY_RESOURCES_DIR: "",
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      LATCH_TMUX_LOG: tmuxLog,
+    };
+
+    const result = runCli(["workspace", "open", "frontend", "feature-one", "--current-session"], { env, cwd: repoCwd });
+    assert.equal(result.status, 0);
+
+    const logged = readFileSync(tmuxLog, "utf-8");
+    assert.match(logged, /respawn-pane -k -t %target -c /);
+    assert.match(logged, new RegExp(realpathSync(workspacePath).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  });
+});
+
+test("cli workspace open --tab opens the named workspace in a new tmux window", () => {
+  withTempDir((dir) => {
+    const configHome = join(dir, "config");
+    const binDir = join(dir, "bin");
+    mkdirSync(binDir, { recursive: true });
+
+    const tmuxLog = join(dir, "tmux.log");
+    const tmuxStub = join(binDir, "tmux");
+    writeFileSync(
+      tmuxStub,
+      "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$LATCH_TMUX_LOG\"\nif [ \"$1\" = \"display-message\" ]; then printf '%s\\n' 'latch-test'; fi\nif [ \"$1\" = \"new-window\" ]; then printf '%s\\n' '@42'; fi\nexit 0\n"
+    );
+    chmodSync(tmuxStub, 0o755);
+
+    const projectPath = projectFixturePath(dir, "frontend");
+    const workspacePath = projectFixturePath(projectPath, ".latch/workspaces/feature-two");
+    addProject("frontend", projectPath, { configPath: configPathFor(configHome) });
+    addWorkspace("frontend", "feature-two", workspacePath, { configPath: configPathFor(configHome) });
+
+    const env = {
+      ...process.env,
+      TMUX: "1",
+      XDG_CONFIG_HOME: configHome,
+      TERM_PROGRAM: "",
+      GHOSTTY_BIN_DIR: "",
+      GHOSTTY_RESOURCES_DIR: "",
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      LATCH_TMUX_LOG: tmuxLog,
+    };
+
+    const result = runCli(["workspace", "open", "frontend", "feature-two", "--tab"], { env, cwd: realpathSync(process.cwd()) });
+    assert.equal(result.status, 0);
+
+    const logged = readFileSync(tmuxLog, "utf-8");
+    assert.match(logged, /latch workspace open frontend feature-two/);
+    assert.match(logged, /new-window -P -F #\{window_id\} -t /);
+  });
+});
+
+test("cli workspace create creates a worktree-backed workspace", () => {
+  withTempDir((dir) => {
+    const configHome = join(dir, "config");
+    const repoPath = join(dir, "repo");
+    initGitRepo(repoPath);
+
+    const env = {
+      ...process.env,
+      XDG_CONFIG_HOME: configHome,
+    };
+
+    assert.equal(runCli(["project", "add", repoPath, "repo"], { env }).status, 0);
+
+    const result = runCli(["workspace", "create", "repo", "feature-two"], {
+      env,
+      cwd: repoPath,
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Created workspace "repo\/feature-two"/);
+
+    const project = getProject("repo", configPathFor(configHome));
+    assert.ok(project);
+    const workspace = project.workspaces["feature-two"];
+    assert.ok(workspace);
+    assert.equal(runGit(["branch", "--show-current"], workspace.path), "feature-two");
+  });
+});
+
+test("cli workspace remove deletes a worktree-backed workspace", () => {
+  withTempDir((dir) => {
+    const configHome = join(dir, "config");
+    const repoPath = join(dir, "repo");
+    initGitRepo(repoPath);
+
+    const env = {
+      ...process.env,
+      XDG_CONFIG_HOME: configHome,
+    };
+
+    assert.equal(runCli(["project", "add", repoPath, "repo"], { env }).status, 0);
+    assert.equal(runCli(["workspace", "create", "repo", "feature-three"], { env, cwd: repoPath }).status, 0);
+
+    const projectBefore = getProject("repo", configPathFor(configHome));
+    assert.ok(projectBefore);
+    const workspacePath = projectBefore.workspaces["feature-three"]?.path;
+    assert.ok(workspacePath);
+    assert.ok(existsSync(workspacePath));
+
+    const result = runCli(["workspace", "remove", "repo", "feature-three"], {
+      env,
+      cwd: repoPath,
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Removed workspace "repo\/feature-three"/);
+    assert.equal(existsSync(workspacePath), false);
+
+    const projectAfter = getProject("repo", configPathFor(configHome));
+    assert.ok(projectAfter);
+    assert.equal(projectAfter.workspaces["feature-three"], undefined);
   });
 });
 
@@ -340,7 +641,7 @@ test("python projects app open-in-tab action invokes project open --tab", () => 
         "    return SimpleNamespace(returncode=0, stdout='', stderr='')",
         "def exit_app(self):",
         "    calls['exited'] = True",
-        "app._selected_project = MethodType(lambda self: projects.ProjectInfo('frontend', '/tmp/frontend', '', '', None), app)",
+        "app._selected_project = MethodType(lambda self: projects.ProjectInfo('frontend', '/tmp/frontend', '/tmp/frontend', '', '', None), app)",
         "app._run_cli = MethodType(run_cli, app)",
         "app.exit = MethodType(exit_app, app)",
         "app.action_open_selected_in_tab()",
@@ -378,7 +679,7 @@ test("python projects app open action invokes project open --current-session", (
         "    return SimpleNamespace(returncode=0, stdout='', stderr='')",
         "def exit_app(self):",
         "    calls['exited'] = True",
-        "app._selected_project = MethodType(lambda self: projects.ProjectInfo('frontend', '/tmp/frontend', '', '', None), app)",
+        "app._selected_project = MethodType(lambda self: projects.ProjectInfo('frontend', '/tmp/frontend', '/tmp/frontend', '', '', None), app)",
         "app._run_cli = MethodType(run_cli, app)",
         "app.exit = MethodType(exit_app, app)",
         "app.action_open_selected()",
@@ -395,6 +696,116 @@ test("python projects app open action invokes project open --current-session", (
   assert.deepEqual(
     JSON.parse(result.stdout.trim()),
     { args: ["project", "open", "frontend", "--current-session"], exited: true }
+  );
+});
+
+test("python load_projects reads v2 projects with multiple workspaces", () => {
+  withTempDir((dir) => {
+    const configPath = configPathFor(dir);
+    const rootPath = projectFixturePath(dir, "frontend");
+    const workspacePath = projectFixturePath(rootPath, ".latch/workspaces/feature-one");
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 2,
+        projects: {
+          frontend: {
+            rootPath,
+            createdAt: "2026-03-31T18:00:00.000Z",
+            updatedAt: "2026-03-31T18:00:00.000Z",
+            lastOpenedAt: null,
+            defaultWorkspace: "root",
+            workspaces: {
+              root: {
+                path: rootPath,
+                kind: "root",
+                createdAt: "2026-03-31T18:00:00.000Z",
+                updatedAt: "2026-03-31T18:00:00.000Z",
+              },
+              "feature-one": {
+                path: workspacePath,
+                kind: "worktree",
+                branch: "feature-one",
+                createdAt: "2026-03-31T18:05:00.000Z",
+                updatedAt: "2026-03-31T18:05:00.000Z",
+                lastOpenedAt: null,
+              },
+            },
+          },
+        },
+      }, null, 2) + "\n"
+    );
+
+    const result = spawnSync(
+      "python3",
+      [
+        "-c",
+        [
+          "import json",
+          "import os",
+          "import sys",
+          `os.environ['XDG_CONFIG_HOME'] = ${JSON.stringify(dir)}`,
+          "sys.path.insert(0, 'python')",
+          "import projects",
+          "items = projects.load_projects()",
+          "print(json.dumps({'count': len(items), 'alias': items[0].alias, 'workspaces': len(items[0].workspaces), 'default': items[0].default_workspace}, sort_keys=True))",
+        ].join("\n"),
+      ],
+      {
+        cwd: realpathSync(process.cwd()),
+        encoding: "utf-8",
+      }
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(
+      JSON.parse(result.stdout.trim()),
+      { alias: "frontend", count: 1, default: "root", workspaces: 2 }
+    );
+  });
+});
+
+test("python projects app open action invokes workspace open when viewing workspaces", () => {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import json",
+        "import sys",
+        "from types import MethodType, SimpleNamespace",
+        "sys.path.insert(0, 'python')",
+        "import projects",
+        "app = projects.ProjectsApp('/tmp')",
+        "calls = {}",
+        "def run_cli(self, args):",
+        "    calls['args'] = args",
+        "    return SimpleNamespace(returncode=0, stdout='', stderr='')",
+        "def exit_app(self):",
+        "    calls['exited'] = True",
+        "workspace = projects.WorkspaceInfo('feature-one', '/tmp/frontend/.latch/workspaces/feature-one', 'worktree', 'feature-one', False, None)",
+        "project = projects.ProjectInfo('frontend', '/tmp/frontend', '/tmp/frontend', '', '', None, 'root', [workspace])",
+        "app._mode = 'workspaces'",
+        "app._projects = [project]",
+        "app._active_project_alias = 'frontend'",
+        "app._selected_workspace = MethodType(lambda self: workspace, app)",
+        "app._run_cli = MethodType(run_cli, app)",
+        "app.exit = MethodType(exit_app, app)",
+        "app.action_open_selected()",
+        "print(json.dumps(calls, sort_keys=True))",
+      ].join("\n"),
+    ],
+    {
+      cwd: realpathSync(process.cwd()),
+      encoding: "utf-8",
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(
+    JSON.parse(result.stdout.trim()),
+    { args: ["workspace", "open", "frontend", "feature-one", "--current-session"], exited: true }
   );
 });
 
