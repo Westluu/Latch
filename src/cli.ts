@@ -4,9 +4,8 @@ import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSessi
 import { sendSidecarMessage } from "./ipc.js";
 import { initHook, removeHook } from "./init.js";
 import { addCurrentProject, addProject, createWorktreeWorkspace, getProject, getProjectPath, getWorkspace, listProjects, listWorkspaces, markProjectOpened, markWorkspaceOpened, removeProject, removeWorkspace } from "./projects.js";
+import { claudeProjectPaths } from "./claude.js";
 import { readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
@@ -386,19 +385,28 @@ if (command === "chat") {
     console.error("latch chat: must be run inside a tmux session.");
     process.exit(1);
   }
-  // Find the most recent transcript for this cwd (optional — chat.py lists all sessions)
-  const projectDir = cwd.replace(/\//g, "-");
-  const projectPath = join(homedir(), ".claude", "projects", projectDir);
   let sessionId = "";
-  try {
-    const files = readdirSync(projectPath)
-      .filter((f: string) => f.endsWith(".jsonl"))
-      .map((f: string) => ({ name: f, mtime: statSync(join(projectPath, f)).mtimeMs }))
-      .sort((a: { mtime: number }, b: { mtime: number }) => b.mtime - a.mtime);
-    if (files.length > 0) {
-      sessionId = files[0].name.replace(/\.jsonl$/, "");
-    }
-  } catch {}
+  const transcripts = new Map<string, { name: string; mtime: number }>();
+  for (const projectPath of claudeProjectPaths(cwd)) {
+    try {
+      const files = readdirSync(projectPath)
+        .filter((f: string) => f.endsWith(".jsonl"))
+        .map((f: string) => ({ name: f, mtime: statSync(`${projectPath}/${f}`).mtimeMs }));
+
+      for (const file of files) {
+        const existing = transcripts.get(file.name);
+        if (!existing || file.mtime > existing.mtime) {
+          transcripts.set(file.name, file);
+        }
+      }
+    } catch {}
+  }
+  const [latest] = [...transcripts.values()].sort(
+    (a: { mtime: number }, b: { mtime: number }) => b.mtime - a.mtime
+  );
+  if (latest) {
+    sessionId = latest.name.replace(/\.jsonl$/, "");
+  }
   try {
     openChatPopup(cwd, sessionId);
   } catch (e: unknown) {

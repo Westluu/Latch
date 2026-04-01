@@ -10,6 +10,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { chmodSync } from "node:fs";
@@ -31,6 +32,7 @@ import {
   removeWorkspace,
   validateProjectAlias,
 } from "./projects.js";
+import { claudeProjectDirName } from "./claude.js";
 import { detectTerminal } from "./terminals/index.js";
 
 function withTempDir(fn: (dir: string) => void): void {
@@ -864,6 +866,53 @@ test("cli projects opens the popup through tmux", () => {
     assert.match(logged, /display-popup/);
     assert.match(logged, /python3/);
     assert.match(logged, /projects\.py/);
+  });
+});
+
+test("cli chat finds Claude sessions in sanitized project directories", () => {
+  withTempDir((dir) => {
+    const binDir = join(dir, "bin");
+    const claudeProjectsDir = join(dir, ".claude", "projects");
+    const repoPath = projectFixturePath(join(dir, "workspace"), "open_source");
+    const projectPath = join(repoPath, "Latch");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(projectPath, { recursive: true });
+
+    const tmuxLog = join(dir, "tmux.log");
+    const tmuxStub = join(binDir, "tmux");
+    const pythonStub = join(binDir, "python3");
+    writeFileSync(
+      tmuxStub,
+      "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$LATCH_TMUX_LOG\"\nif [ \"$1\" = \"display-message\" ] && [ \"$2\" = \"-p\" ] && [ \"$3\" = '#{pane_id}' ]; then printf '%s\\n' '%claude'; fi\nif [ \"$1\" = \"display-popup\" ]; then exit 0; fi\nexit 0\n"
+    );
+    chmodSync(tmuxStub, 0o755);
+    writeFileSync(pythonStub, "#!/bin/sh\nexit 0\n");
+    chmodSync(pythonStub, 0o755);
+
+    const claudeProjectDir = join(claudeProjectsDir, claudeProjectDirName(realpathSync(projectPath)));
+    mkdirSync(claudeProjectDir, { recursive: true });
+    writeFileSync(join(claudeProjectDir, "older.jsonl"), "{}\n");
+    writeFileSync(join(claudeProjectDir, "latest.jsonl"), "{}\n");
+
+    const olderTime = new Date("2026-03-31T18:00:00.000Z");
+    const latestTime = new Date("2026-04-01T18:00:00.000Z");
+    utimesSync(join(claudeProjectDir, "older.jsonl"), olderTime, olderTime);
+    utimesSync(join(claudeProjectDir, "latest.jsonl"), latestTime, latestTime);
+
+    const env = {
+      ...process.env,
+      HOME: dir,
+      TMUX: "1",
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      LATCH_TMUX_LOG: tmuxLog,
+    };
+
+    const result = runCli(["chat"], { env, cwd: projectPath });
+    assert.equal(result.status, 0, result.stderr);
+
+    const logged = readFileSync(tmuxLog, "utf-8");
+    assert.match(logged, /display-popup/);
+    assert.match(logged, /latest/);
   });
 });
 
