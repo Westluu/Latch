@@ -4,20 +4,15 @@
 
 import { killLatchPanes } from "./tmux.js";
 import { sessionIdFromTranscript } from "./transcript.js";
+import { readJsonFromStdin } from "./hook-runtime.js";
 
-let input = "";
-const timeout = setTimeout(() => process.exit(0), 5000);
-
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => (input += chunk));
-process.stdin.on("end", () => {
-  clearTimeout(timeout);
+void (async () => {
+  const data = await readJsonFromStdin(5000);
   try {
-    const data = JSON.parse(input);
-    const cwd = data.cwd || process.cwd();
-    const transcriptPath = data.transcript_path as string | undefined;
+    const cwd = (data?.cwd as string) || process.cwd();
+    const transcriptPath = data?.transcript_path as string | undefined;
     const sessionId = transcriptPath ? sessionIdFromTranscript(transcriptPath) : "";
     killLatchPanes(cwd, sessionId);
   } catch {}
   process.exit(0);
-});
+})();

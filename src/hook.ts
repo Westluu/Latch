@@ -7,30 +7,23 @@ import { homedir } from "node:os";
 import { sendSidecarMessage } from "./ipc.js";
 import { ensureSidecarReady } from "./sidecar-runtime.js";
 import { sessionIdFromTranscript } from "./transcript.js";
+import { createFileLogger, readJsonFromStdin } from "./hook-runtime.js";
 
 const PLANS_DIR = join(homedir(), ".claude", "plans");
 
-import { appendFileSync } from "node:fs";
 const LOG = "/tmp/latch-hook.log";
-const dbg = (...args: unknown[]) => {
-  try { appendFileSync(LOG, `[${new Date().toISOString()}] ${args.join(" ")}\n`); } catch {}
-};
+const dbg = createFileLogger(LOG);
 
-let input = "";
-const timeout = setTimeout(() => process.exit(0), 5000);
-
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => (input += chunk));
-process.stdin.on("end", async () => {
-  clearTimeout(timeout);
+void (async () => {
+  const data = await readJsonFromStdin(5000);
   try {
-    const data = JSON.parse(input);
-    const filePath = data.tool_input?.file_path;
+    const toolInput = data?.tool_input as Record<string, unknown> | undefined;
+    const filePath = typeof toolInput?.file_path === "string" ? toolInput.file_path : "";
     dbg("filePath:", filePath);
     if (!filePath) process.exit(0);
 
-    const cwd = data.cwd || process.cwd();
-    const transcriptPath = data.transcript_path as string | undefined;
+    const cwd = (data?.cwd as string) || process.cwd();
+    const transcriptPath = data?.transcript_path as string | undefined;
     const sessionId = transcriptPath ? sessionIdFromTranscript(transcriptPath) : "";
     const relative = filePath.startsWith(cwd + "/")
       ? filePath.slice(cwd.length + 1)
@@ -54,4 +47,4 @@ process.stdin.on("end", async () => {
     dbg("ERROR:", err);
   }
   process.exit(0);
-});
+})();
