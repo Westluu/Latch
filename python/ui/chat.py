@@ -13,9 +13,12 @@ import os
 import sys
 from typing import Optional
 
-PYTHON_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if PYTHON_ROOT not in sys.path:
-    sys.path.insert(0, PYTHON_ROOT)
+try:
+    from ._runtime import arg_value, bootstrap_python_root, require_directory_arg
+except ImportError:
+    from _runtime import arg_value, bootstrap_python_root, require_directory_arg
+
+bootstrap_python_root()
 
 from latch import theme
 from latch.session_store import Message, SessionInfo, list_sessions, parse_messages
@@ -331,17 +334,9 @@ class ChatApp(App):
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python3 ui/chat.py <cwd> [session_id] [claude_pane]", file=sys.stderr)
-        sys.exit(1)
-
-    cwd = os.path.abspath(sys.argv[1])
-    session_id = sys.argv[2] if len(sys.argv) > 2 else ""
-    claude_pane = sys.argv[3] if len(sys.argv) > 3 else ""
-
-    if not os.path.isdir(cwd):
-        print(f"Error: {cwd!r} is not a directory", file=sys.stderr)
-        sys.exit(1)
+    cwd = require_directory_arg(sys.argv, 1, "Usage: python3 ui/chat.py <cwd> [session_id] [claude_pane]")
+    session_id = arg_value(sys.argv, 2)
+    claude_pane = arg_value(sys.argv, 3)
 
     app = ChatApp(cwd, session_id, claude_pane)
     app.run()

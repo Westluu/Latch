@@ -5,6 +5,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from json import JSONDecodeError
 from typing import Optional
 
 from latch.claude_paths import claude_project_paths, find_transcript_path, transcript_matches_cwd
@@ -52,51 +53,49 @@ def list_sessions(cwd: str) -> list[SessionInfo]:
     for project_path in claude_project_paths(cwd):
         if not os.path.isdir(project_path):
             continue
-        for fname in os.listdir(project_path):
+        try:
+            project_files = os.listdir(project_path)
+        except OSError:
+            continue
+
+        for fname in project_files:
             if not fname.endswith(".jsonl"):
                 continue
             fpath = os.path.join(project_path, fname)
             if not transcript_matches_cwd(fpath, cwd):
                 continue
             sid = fname.replace(".jsonl", "")
-            size = os.path.getsize(fpath)
+            try:
+                size = os.path.getsize(fpath)
+            except OSError:
+                continue
             label = ""
             first_ts = None
             last_ts = None
 
-            try:
-                with open(fpath) as f:
-                    lines = f.readlines()
+            for tline in _read_transcript_lines(fpath):
+                ts_match = _TS_RE.search(tline)
+                if ts_match:
+                    timestamp = _parse_ts(ts_match.group(1))
+                    if timestamp:
+                        if first_ts is None:
+                            first_ts = timestamp
+                        last_ts = timestamp
 
-                for tline in lines:
-                    tline = tline.strip()
-                    if not tline:
-                        continue
-
-                    ts_match = _TS_RE.search(tline)
-                    if ts_match:
-                        timestamp = _parse_ts(ts_match.group(1))
-                        if timestamp:
-                            if first_ts is None:
-                                first_ts = timestamp
-                            last_ts = timestamp
-
-                    if not label:
-                        try:
-                            obj = json.loads(tline)
-                        except Exception:
-                            continue
-                        if (
-                            obj.get("type") == "user"
-                            and obj.get("isSidechain") is False
-                            and not obj.get("isMeta")
-                        ):
-                            text = _extract_text(obj)
-                            first_line = text.split("\n")[0].strip() if text else ""
-                            if first_line:
-                                label = first_line[:50]
-            except Exception:
-                pass
+                if label:
+                    continue
+                obj = _parse_json_object(tline)
+                if obj is None:
+                    continue
+                if (
+                    obj.get("type") == "user"
+                    and obj.get("isSidechain") is False
+                    and not obj.get("isMeta")
+                ):
+                    text = _extract_text(obj)
+                    first_line = text.split("\n")[0].strip() if text else ""
+                    if first_line:
+                        label = first_line[:50]
 
             if not label:
                 label = sid[:12]
@@ -105,7 +104,7 @@ def list_sessions(cwd: str) -> list[SessionInfo]:
             if not ts:
                 try:
                     ts = datetime.fromtimestamp(os.path.getmtime(fpath), tz=timezone.utc)
-                except Exception:
+                except OSError:
                     pass
 
             duration = 0
@@ -142,22 +141,12 @@ def parse_messages(cwd: str, session_id: str) -> list[Message]:
     if not transcript:
         return []
 
-    try:
-        with open(transcript) as f:
-            lines = f.readlines()
-    except Exception:
-        return []
-
     messages: list[Message] = []
     pending_tool_uses: dict[str, tuple[int, int]] = {}
 
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except Exception:
+    for line in _read_transcript_lines(transcript):
+        obj = _parse_json_object(line)
+        if obj is None:
             continue
 
         obj_type = obj.get("type")
@@ -272,21 +261,13 @@ def get_session_plan_path(cwd: str, session_id: str) -> Optional[str]:
     transcript = find_transcript_path(cwd, session_id)
     if not transcript:
         return None
-    try:
-        with open(transcript) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except Exception:
-                    continue
-                slug = obj.get("slug")
-                if slug:
-                    return os.path.join(PLANS_DIR, f"{slug}.md")
-    except Exception:
-        pass
+    for line in _read_transcript_lines(transcript):
+        obj = _parse_json_object(line)
+        if obj is None:
+            continue
+        slug = obj.get("slug")
+        if slug:
+            return os.path.join(PLANS_DIR, f"{slug}.md")
     return None
 
 
@@ -294,7 +275,7 @@ def read_plan(plan_path: str) -> str:
     try:
         with open(plan_path) as f:
             return f.read()
-    except Exception:
+    except OSError:
         return "*Could not read plan file.*"
 
 
@@ -329,5 +310,21 @@ def _parse_ts(raw: object) -> Optional[datetime]:
         return None
     try:
         return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except Exception:
+    except ValueError:
         return None
+
+
+def _read_transcript_lines(path: str) -> list[str]:
+    try:
+        with open(path) as f:
+            return [line.strip() for line in f if line.strip()]
+    except OSError:
+        return []
+
+
+def _parse_json_object(line: str) -> dict | None:
+    try:
+        obj = json.loads(line)
+    except JSONDecodeError:
+        return None
+    return obj if isinstance(obj, dict) else None

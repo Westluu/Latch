@@ -8,15 +8,16 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import atexit
 import os
-import signal
 import sys
 from typing import Optional
 
-PYTHON_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if PYTHON_ROOT not in sys.path:
-    sys.path.insert(0, PYTHON_ROOT)
+try:
+    from ._runtime import arg_value, bootstrap_python_root, register_socket_cleanup, require_directory_arg
+except ImportError:
+    from _runtime import arg_value, bootstrap_python_root, register_socket_cleanup, require_directory_arg
+
+bootstrap_python_root()
 
 from latch import theme
 from latch.git_state import STATUS_COLORS, get_changed_files, get_diff, render_diff
@@ -364,21 +365,11 @@ class SidecarApp(App):
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python3 ui/sidecar.py <cwd> [session_id]", file=sys.stderr)
-        sys.exit(1)
-
-    cwd = os.path.abspath(sys.argv[1])
-    session_id = sys.argv[2] if len(sys.argv) > 2 else ""
-    if not os.path.isdir(cwd):
-        print(f"Error: {cwd!r} is not a directory", file=sys.stderr)
-        sys.exit(1)
+    cwd = require_directory_arg(sys.argv, 1, "Usage: python3 ui/sidecar.py <cwd> [session_id]")
+    session_id = arg_value(sys.argv, 2)
 
     socket_path = build_socket_path(cwd, "sidecar", session_id)
-
-    atexit.register(cleanup_socket, socket_path)
-    signal.signal(signal.SIGHUP, lambda *_: (cleanup_socket(socket_path), sys.exit(0)))
-    signal.signal(signal.SIGTERM, lambda *_: (cleanup_socket(socket_path), sys.exit(0)))
+    register_socket_cleanup(socket_path, cleanup_socket)
 
     app = SidecarApp(cwd, session_id)
     app.run()

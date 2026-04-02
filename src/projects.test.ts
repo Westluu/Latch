@@ -625,6 +625,30 @@ test("python projects app registers ctrl+t for open in tab", () => {
   assert.equal(lines[1], "True");
 });
 
+test("python projects app resolves cli path from the repo dist directory", () => {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import os",
+        "import sys",
+        "sys.path.insert(0, 'python')",
+        "import ui.projects as projects",
+        "app = projects.ProjectsApp('/tmp')",
+        "print(os.path.relpath(app._cli_path(), os.getcwd()))",
+      ].join("\n"),
+    ],
+    {
+      cwd: realpathSync(process.cwd()),
+      encoding: "utf-8",
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), "dist/cli.js");
+});
+
 test("python projects app open-in-tab action invokes project open --tab", () => {
   const result = spawnSync(
     "python3",

@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 from typing import Optional, Sequence, Tuple, TypeVar
 
-PYTHON_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if PYTHON_ROOT not in sys.path:
-    sys.path.insert(0, PYTHON_ROOT)
+try:
+    from ._runtime import bootstrap_python_root, dist_cli_path, require_directory_arg
+except ImportError:
+    from _runtime import bootstrap_python_root, dist_cli_path, require_directory_arg
+
+bootstrap_python_root()
 
 from latch.projects_store import ProjectInfo, WorkspaceInfo, load_projects
 from textual.app import App, ComposeResult
@@ -218,8 +220,7 @@ class ProjectsApp(App):
         return self._selected_item(self._filtered_workspaces) if self._mode == "workspaces" else None
 
     def _cli_path(self) -> str:
-        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        return os.path.join(repo_root, "dist", "cli.js")
+        return dist_cli_path()
 
     def _run_cli(self, args: list[str]) -> subprocess.CompletedProcess[str] | None:
         cli_path = self._cli_path()
@@ -445,14 +446,8 @@ class ProjectsApp(App):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python3 ui/projects.py <cwd>", file=sys.stderr)
-        sys.exit(1)
+    import sys
 
-    cwd = os.path.abspath(sys.argv[1])
-    if not os.path.isdir(cwd):
-        print(f"Error: {cwd!r} is not a directory", file=sys.stderr)
-        sys.exit(1)
-
+    cwd = require_directory_arg(sys.argv, 1, "Usage: python3 ui/projects.py <cwd>")
     app = ProjectsApp(cwd)
     app.run()

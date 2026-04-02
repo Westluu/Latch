@@ -8,17 +8,18 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import atexit
 import os
-import signal
 import shutil
 import sys
 from dataclasses import dataclass
 from datetime import datetime
 
-PYTHON_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if PYTHON_ROOT not in sys.path:
-    sys.path.insert(0, PYTHON_ROOT)
+try:
+    from ._runtime import bootstrap_python_root, register_socket_cleanup, require_directory_arg
+except ImportError:
+    from _runtime import bootstrap_python_root, register_socket_cleanup, require_directory_arg
+
+bootstrap_python_root()
 
 from latch import theme
 from latch.ipc import build_socket_path, cleanup_socket, send_json_message, start_ipc_server
@@ -357,18 +358,11 @@ if __name__ == "__main__":
         print("Usage: python3 ui/tray.py <cwd> <session_id>", file=sys.stderr)
         sys.exit(1)
 
-    cwd = os.path.abspath(sys.argv[1])
+    cwd = require_directory_arg(sys.argv, 1, "Usage: python3 ui/tray.py <cwd> <session_id>")
     session_id = sys.argv[2]
 
-    if not os.path.isdir(cwd):
-        print(f"Error: {cwd!r} is not a directory", file=sys.stderr)
-        sys.exit(1)
-
     socket_path = build_socket_path(cwd, "tray", session_id)
-
-    atexit.register(cleanup_socket, socket_path)
-    signal.signal(signal.SIGHUP, lambda *_: (cleanup_socket(socket_path), sys.exit(0)))
-    signal.signal(signal.SIGTERM, lambda *_: (cleanup_socket(socket_path), sys.exit(0)))
+    register_socket_cleanup(socket_path, cleanup_socket)
 
     app = TrayApp(cwd, session_id)
     app.run()
