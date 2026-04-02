@@ -22,7 +22,6 @@ class ContentBlock:
     text: str = ""
     tool_name: str = ""
     tool_file: str = ""
-    tool_id: str = ""
     token_count: int = 0
     is_error: bool = False
 
@@ -136,36 +135,6 @@ def list_sessions(cwd: str) -> list[SessionInfo]:
     return sessions
 
 
-def search_session_content(path: str, query: str) -> bool:
-    query_lower = query.lower()
-    try:
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except Exception:
-                    continue
-                obj_type = obj.get("type")
-                if obj_type not in ("user", "assistant"):
-                    continue
-                msg = obj.get("message", {})
-                content = msg.get("content", "")
-                if isinstance(content, str):
-                    if query_lower in content.lower():
-                        return True
-                elif isinstance(content, list):
-                    for block in content:
-                        text = block.get("text", "") or block.get("thinking", "")
-                        if text and query_lower in text.lower():
-                            return True
-    except Exception:
-        pass
-    return False
-
-
 def parse_messages(cwd: str, session_id: str) -> list[Message]:
     transcript = find_transcript_path(cwd, session_id)
     if not transcript:
@@ -274,7 +243,6 @@ def parse_messages(cwd: str, session_id: str) -> list[Message]:
                         kind="tool_use",
                         tool_name=block.get("name", ""),
                         tool_file=str(tool_file),
-                        tool_id=tool_id,
                         is_error=False,
                     )
                     blocks.append(content_block)

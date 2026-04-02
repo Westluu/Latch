@@ -17,10 +17,9 @@ import textwrap
 from datetime import datetime, timezone
 from typing import Optional
 
-UI_DIR = os.path.dirname(os.path.abspath(__file__))
-PYTHON_DIR = os.path.dirname(UI_DIR)
-if PYTHON_DIR not in sys.path:
-    sys.path.insert(0, PYTHON_DIR)
+PYTHON_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PYTHON_ROOT not in sys.path:
+    sys.path.insert(0, PYTHON_ROOT)
 
 from latch import theme
 from latch.session_store import Message, SessionInfo, list_sessions, parse_messages

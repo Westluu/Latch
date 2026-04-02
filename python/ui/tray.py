@@ -16,10 +16,9 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 
-UI_DIR = os.path.dirname(os.path.abspath(__file__))
-PYTHON_DIR = os.path.dirname(UI_DIR)
-if PYTHON_DIR not in sys.path:
-    sys.path.insert(0, PYTHON_DIR)
+PYTHON_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PYTHON_ROOT not in sys.path:
+    sys.path.insert(0, PYTHON_ROOT)
 
 from latch import theme
 from latch.ipc import build_socket_path, cleanup_socket, send_json_message, start_ipc_server
