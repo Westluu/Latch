@@ -768,6 +768,75 @@ test("python load_projects reads v2 projects with multiple workspaces", () => {
   });
 });
 
+test("python load_projects skips malformed project entries instead of failing the whole list", () => {
+  withTempDir((dir) => {
+    const configPath = configPathFor(dir);
+    const validRootPath = projectFixturePath(dir, "frontend");
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 2,
+        projects: {
+          frontend: {
+            rootPath: validRootPath,
+            createdAt: "2026-03-31T18:00:00.000Z",
+            updatedAt: "2026-03-31T18:00:00.000Z",
+            lastOpenedAt: null,
+            defaultWorkspace: "root",
+            workspaces: {
+              root: {
+                path: validRootPath,
+                kind: "root",
+                createdAt: "2026-03-31T18:00:00.000Z",
+                updatedAt: "2026-03-31T18:00:00.000Z",
+              },
+            },
+          },
+          broken: {
+            rootPath: projectFixturePath(dir, "broken"),
+            createdAt: "2026-03-31T18:00:00.000Z",
+            defaultWorkspace: "root",
+            workspaces: {
+              root: {
+                path: projectFixturePath(dir, "broken"),
+                kind: "root",
+              },
+            },
+          },
+        },
+      }, null, 2) + "\n"
+    );
+
+    const result = spawnSync(
+      "python3",
+      [
+        "-c",
+        [
+          "import json",
+          "import os",
+          "import sys",
+          `os.environ['XDG_CONFIG_HOME'] = ${JSON.stringify(dir)}`,
+          "sys.path.insert(0, 'python')",
+          "import ui.projects as projects",
+          "items = projects.load_projects()",
+          "print(json.dumps({'count': len(items), 'aliases': [item.alias for item in items]}, sort_keys=True))",
+        ].join("\n"),
+      ],
+      {
+        cwd: realpathSync(process.cwd()),
+        encoding: "utf-8",
+      }
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout.trim()), {
+      aliases: ["frontend"],
+      count: 1,
+    });
+  });
+});
+
 test("python projects app open action invokes workspace open when viewing workspaces", () => {
   const result = spawnSync(
     "python3",

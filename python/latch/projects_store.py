@@ -46,6 +46,14 @@ def load_projects() -> list[ProjectInfo]:
     projects = data.get("projects", {})
     items: list[ProjectInfo] = []
     for alias, project in projects.items():
+        if not isinstance(project, dict):
+            continue
+
+        created_at = project.get("createdAt")
+        updated_at = project.get("updatedAt")
+        if not isinstance(created_at, str) or not isinstance(updated_at, str):
+            continue
+
         if version >= 2:
             default_workspace = project.get("defaultWorkspace", "default")
             workspaces = project.get("workspaces", {})
@@ -98,8 +106,8 @@ def load_projects() -> list[ProjectInfo]:
                 alias=alias,
                 root_path=root_path,
                 path=project_path,
-                created_at=project["createdAt"],
-                updated_at=project["updatedAt"],
+                created_at=created_at,
+                updated_at=updated_at,
                 last_opened_at=last_opened_at,
                 default_workspace=default_workspace,
                 workspaces=workspace_items,
