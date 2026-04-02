@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-from latch.claude_paths import claude_project_paths, find_transcript_path
+from latch.claude_paths import claude_project_paths, find_transcript_path, transcript_matches_cwd
 
 
 PLANS_DIR = os.path.join(os.path.expanduser("~"), ".claude", "plans")
@@ -56,6 +56,8 @@ def list_sessions(cwd: str) -> list[SessionInfo]:
             if not fname.endswith(".jsonl"):
                 continue
             fpath = os.path.join(project_path, fname)
+            if not transcript_matches_cwd(fpath, cwd):
+                continue
             sid = fname.replace(".jsonl", "")
             size = os.path.getsize(fpath)
             label = ""

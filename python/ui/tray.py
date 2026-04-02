@@ -49,26 +49,45 @@ class TurnData:
 
 # ── Revert logic ──────────────────────────────────────────────────────────────
 
-def revert_from(turns: list[TurnData], from_index: int) -> list[TurnData]:
+def _restore_turn_file(file_info: dict) -> str | None:
+    target_path = file_info["path"]
+    backup_path = file_info.get("backupFile")
+
+    if backup_path is None:
+        if os.path.exists(target_path):
+            os.unlink(target_path)
+        return None
+
+    if not os.path.exists(backup_path):
+        return f'missing backup for "{os.path.basename(target_path)}"'
+
+    parent_dir = os.path.dirname(target_path)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+
+    shutil.copy2(backup_path, target_path)
+    return None
+
+
+def revert_from(turns: list[TurnData], from_index: int) -> tuple[list[TurnData], list[str]]:
     """Revert turns from from_index onward, processing newest to oldest."""
     to_revert = list(reversed(turns[from_index:]))
+    errors: list[str] = []
+
     for turn in to_revert:
         if turn.reverted:
             continue
         for f in turn.files:
             try:
-                if f["backupFile"] is None:
-                    # File was created this turn — delete it
-                    if os.path.exists(f["path"]):
-                        os.unlink(f["path"])
-                elif os.path.exists(f["backupFile"]):
-                    # Restore from backup
-                    shutil.copy2(f["backupFile"], f["path"])
-            except Exception:
-                pass
-    for i in range(from_index, len(turns)):
-        turns[i].reverted = True
-    return turns
+                error = _restore_turn_file(f)
+            except OSError as exc:
+                error = f'could not restore "{os.path.basename(f["path"])}": {exc}'
+            if error is not None:
+                errors.append(f'{turn.label}: {error}')
+                return turns, errors
+        turn.reverted = True
+
+    return turns, errors
 
 
 # ── Card rendering ────────────────────────────────────────────────────────────
@@ -311,10 +330,17 @@ class TrayApp(App):
         if self._turns[idx].reverted:
             self.notify("Turn already reverted", severity="warning")
             return
-        self._turns = revert_from(self._turns, idx)
+        reverted_before = sum(1 for turn in self._turns if turn.reverted)
+        self._turns, errors = revert_from(self._turns, idx)
+        reverted_after = sum(1 for turn in self._turns if turn.reverted)
+        reverted_now = reverted_after - reverted_before
         self._rebuild_cards()
-        self.notify(f"Reverted {len(self._turns) - idx} turn(s)")
-        await send_to_sidecar(self.cwd, self.session_id, {"type": "refresh"})
+        if errors:
+            self.notify(errors[0], severity="error")
+        else:
+            self.notify(f"Reverted {reverted_now} turn(s)")
+        if reverted_now > 0:
+            await send_to_sidecar(self.cwd, self.session_id, {"type": "refresh"})
 
     def action_review(self) -> None:
         if not self._turns:

@@ -64,13 +64,17 @@ def get_changed_files(cwd: str) -> list[ChangedFile]:
 
 
 def get_diff(cwd: str, file_path: str) -> str:
-    for args in [
+    diff_parts: list[str] = []
+    for args in (
         ["git", "diff", "--cached", "--", file_path],
         ["git", "diff", "--", file_path],
-    ]:
+    ):
         result = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
-        if result.stdout.strip():
-            return result.stdout
+        output = result.stdout.strip()
+        if output:
+            diff_parts.append(output)
+    if diff_parts:
+        return "\n\n".join(diff_parts) + "\n"
     full = os.path.join(cwd, file_path)
     if os.path.exists(full):
         try:

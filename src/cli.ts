@@ -4,7 +4,7 @@ import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSessi
 import { sendSidecarMessage } from "./ipc.js";
 import { initHook, removeHook } from "./init.js";
 import { addCurrentProject, addProject, createWorktreeWorkspace, getProject, getProjectPath, getWorkspace, listProjects, listWorkspaces, markProjectOpened, markWorkspaceOpened, removeProject, removeWorkspace } from "./projects.js";
-import { claudeProjectPaths } from "./claude.js";
+import { claudeProjectPaths, transcriptMatchesCwd } from "./claude.js";
 import { readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -391,6 +391,7 @@ if (command === "chat") {
     try {
       const files = readdirSync(projectPath)
         .filter((f: string) => f.endsWith(".jsonl"))
+        .filter((f: string) => transcriptMatchesCwd(`${projectPath}/${f}`, cwd))
         .map((f: string) => ({ name: f, mtime: statSync(`${projectPath}/${f}`).mtimeMs }));
 
       for (const file of files) {

@@ -916,6 +916,133 @@ test("cli chat finds Claude sessions in sanitized project directories", () => {
   });
 });
 
+test("cli chat ignores newer transcripts from a different cwd in a colliding Claude directory", () => {
+  withTempDir((dir) => {
+    const binDir = join(dir, "bin");
+    const claudeProjectsDir = join(dir, ".claude", "projects");
+    const workspaceDir = join(dir, "workspace");
+    const targetPath = projectFixturePath(workspaceDir, "a-b");
+    const otherPath = projectFixturePath(workspaceDir, "a/b");
+    mkdirSync(binDir, { recursive: true });
+
+    const tmuxLog = join(dir, "tmux.log");
+    const tmuxStub = join(binDir, "tmux");
+    const pythonStub = join(binDir, "python3");
+    writeFileSync(
+      tmuxStub,
+      "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$LATCH_TMUX_LOG\"\nif [ \"$1\" = \"display-message\" ] && [ \"$2\" = \"-p\" ] && [ \"$3\" = '#{pane_id}' ]; then printf '%s\\n' '%claude'; fi\nif [ \"$1\" = \"display-popup\" ]; then exit 0; fi\nexit 0\n"
+    );
+    chmodSync(tmuxStub, 0o755);
+    writeFileSync(pythonStub, "#!/bin/sh\nexit 0\n");
+    chmodSync(pythonStub, 0o755);
+
+    const collidingDir = join(claudeProjectsDir, claudeProjectDirName(realpathSync(targetPath)));
+    mkdirSync(collidingDir, { recursive: true });
+    writeFileSync(
+      join(collidingDir, "wrong.jsonl"),
+      JSON.stringify({ cwd: realpathSync(otherPath) }) + "\n"
+    );
+    writeFileSync(
+      join(collidingDir, "right.jsonl"),
+      JSON.stringify({ cwd: realpathSync(targetPath) }) + "\n"
+    );
+
+    const wrongTime = new Date("2026-04-01T19:00:00.000Z");
+    const rightTime = new Date("2026-04-01T18:00:00.000Z");
+    utimesSync(join(collidingDir, "wrong.jsonl"), wrongTime, wrongTime);
+    utimesSync(join(collidingDir, "right.jsonl"), rightTime, rightTime);
+
+    const env = {
+      ...process.env,
+      HOME: dir,
+      TMUX: "1",
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      LATCH_TMUX_LOG: tmuxLog,
+    };
+
+    const result = runCli(["chat"], { env, cwd: targetPath });
+    assert.equal(result.status, 0, result.stderr);
+
+    const logged = readFileSync(tmuxLog, "utf-8");
+    assert.match(logged, /display-popup/);
+    assert.match(logged, /right/);
+    assert.doesNotMatch(logged, /wrong/);
+  });
+});
+
+test("python get_diff includes both staged and unstaged changes for a partially staged file", () => {
+  withTempDir((dir) => {
+    const repoPath = join(dir, "repo");
+    initGitRepo(repoPath);
+
+    const filePath = join(repoPath, "notes.txt");
+    writeFileSync(filePath, "alpha\nbeta\n");
+    runGit(["add", "notes.txt"], repoPath);
+    runGit(["commit", "-m", "add notes"], repoPath);
+
+    writeFileSync(filePath, "ALPHA\nbeta\n");
+    runGit(["add", "notes.txt"], repoPath);
+    writeFileSync(filePath, "ALPHA\nBETA\n");
+
+    const result = spawnSync(
+      "python3",
+      [
+        "-c",
+        [
+          "import sys",
+          "sys.path.insert(0, 'python')",
+          "from latch.git_state import get_diff",
+          `print(get_diff(${JSON.stringify(repoPath)}, 'notes.txt'))`,
+        ].join("\n"),
+      ],
+      {
+        cwd: realpathSync(process.cwd()),
+        encoding: "utf-8",
+      }
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /-alpha/);
+    assert.match(result.stdout, /\+ALPHA/);
+    assert.match(result.stdout, /-beta/);
+    assert.match(result.stdout, /\+BETA/);
+  });
+});
+
+test("python tray revert_from leaves turns unreverted when restore fails", () => {
+  withTempDir((dir) => {
+    const targetPath = join(dir, "restored", "note.txt");
+    const missingBackupPath = join(dir, "missing-backup.txt");
+
+    const result = spawnSync(
+      "python3",
+      [
+        "-c",
+        [
+          "import json",
+          "import sys",
+          "from datetime import datetime",
+          "sys.path.insert(0, 'python')",
+          "import ui.tray as tray",
+          `turn = tray.TurnData('turn-1', 'Broken restore', [{'path': ${JSON.stringify(targetPath)}, 'backupFile': ${JSON.stringify(missingBackupPath)}, 'isNew': False}], {'added': 1, 'removed': 0}, datetime.utcnow())`,
+          "turns, errors = tray.revert_from([turn], 0)",
+          "print(json.dumps({'reverted': turns[0].reverted, 'errors': errors}))",
+        ].join("\n"),
+      ],
+      {
+        cwd: realpathSync(process.cwd()),
+        encoding: "utf-8",
+      }
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout.trim()), {
+      reverted: false,
+      errors: ['Broken restore: missing backup for "note.txt"'],
+    });
+  });
+});
+
 test("cli workspaces opens the picker in a left tmux pane", () => {
   withTempDir((dir) => {
     const binDir = join(dir, "bin");
