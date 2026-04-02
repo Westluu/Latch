@@ -71,5 +71,5 @@ async def send_json_message(socket_path: str, msg: JsonMessage) -> None:
         await reader.read(64)
         writer.close()
         await writer.wait_closed()
-    except Exception:
+    except (ConnectionError, OSError, asyncio.IncompleteReadError):
         pass

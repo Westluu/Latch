@@ -262,7 +262,9 @@ class TrayApp(App):
             self._ipc_server = await start_ipc_server(self._socket_path, on_message)
             async with self._ipc_server:
                 await self._ipc_server.serve_forever()
-        except Exception:
+        except asyncio.CancelledError:
+            raise
+        except OSError:
             pass
 
     def _rebuild_cards(self) -> None:

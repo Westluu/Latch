@@ -12,592 +12,30 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from typing import Optional, Tuple
+from typing import Optional, Sequence, Tuple, TypeVar
 
 PYTHON_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PYTHON_ROOT not in sys.path:
     sys.path.insert(0, PYTHON_ROOT)
 
-from latch import theme
 from latch.projects_store import ProjectInfo, WorkspaceInfo, load_projects
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.screen import ModalScreen
+from textual.containers import Vertical
 from textual.widgets import Footer, Header, Input, ListItem, ListView, Static
 
-
-def shorten_path(path: str, max_len: int = 52) -> str:
-    home = os.path.expanduser("~")
-    display = path.replace(home, "~", 1) if path.startswith(home) else path
-    if len(display) <= max_len:
-        return display
-    return "..." + display[-(max_len - 3):]
-
-
-class ProjectListItem(ListItem):
-    def __init__(self, project: ProjectInfo) -> None:
-        super().__init__()
-        self.project = project
-        self._icon = Static(">", classes="project-icon")
-        self._alias = Static(project.alias, classes="project-alias")
-        workspace_count = len(project.workspaces)
-        count_label = "workspace" if workspace_count == 1 else "workspaces"
-        self._path = Static(shorten_path(project.root_path, 68), classes="project-path")
-        self._meta = Static(f"{workspace_count} {count_label}", classes="project-meta")
-        self._content = Vertical(self._alias, self._meta, self._path, classes="project-content")
-        self._row = Horizontal(self._icon, self._content, classes="project-row")
-
-    def compose(self) -> ComposeResult:
-        yield self._row
-
-    def set_selected(self, selected: bool) -> None:
-        self._row.set_class(selected, "-selected")
-
-
-class WorkspaceListItem(ListItem):
-    def __init__(self, workspace: WorkspaceInfo) -> None:
-        super().__init__()
-        self.workspace = workspace
-        self._icon = Static(">", classes="project-icon")
-        label = workspace.name + (" *" if workspace.is_default else "")
-        self._alias = Static(label, classes="project-alias")
-        details = workspace.kind
-        if workspace.branch:
-            details = f"{details}  {workspace.branch}"
-        self._meta = Static(details, classes="project-meta")
-        self._path = Static(shorten_path(workspace.path, 68), classes="project-path")
-        self._content = Vertical(self._alias, self._meta, self._path, classes="project-content")
-        self._row = Horizontal(self._icon, self._content, classes="project-row")
-
-    def compose(self) -> ComposeResult:
-        yield self._row
-
-    def set_selected(self, selected: bool) -> None:
-        self._row.set_class(selected, "-selected")
-
-
-class DirectorySuggestionItem(ListItem):
-    def __init__(self, path: str) -> None:
-        super().__init__()
-        self.path = path
-        name = os.path.basename(path.rstrip(os.sep)) or path
-        parent = shorten_path(os.path.dirname(path), 24)
-        label = f"[bold {theme.TEXT_PRIMARY}]{name}/[/] [{theme.TEXT_SUBTLE}]{parent}[/]"
-        self._row = Static(label, classes="directory-row")
-
-    def compose(self) -> ComposeResult:
-        yield self._row
-
-    def set_selected(self, selected: bool) -> None:
-        self._row.set_class(selected, "-selected")
-
-
-class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
-    CSS = """
-    AddWorkspaceModal {
-        align: center middle;
-        background: %(overlay_bg)s;
-    }
-
-    #add-modal {
-        width: 84;
-        min-width: 60;
-        max-width: 96%%;
-        height: auto;
-        background: %(modal_bg)s;
-        padding: 0;
-    }
-
-    .main-panel {
-        border: round %(border)s;
-        background: %(app_bg)s;
-        padding: 1 2;
-    }
-
-    #details-panel {
-        height: auto;
-    }
-
-    #preview-panel {
-        height: auto;
-        min-height: 8;
-        margin: 1 0 0 0;
-    }
-
-    #actions-row {
-        align: center middle;
-        height: 3;
-    }
-
-    .panel-title {
-        color: %(text_secondary)s;
-        text-style: bold;
-        padding: 0 0 1 0;
-    }
-
-    .field-row {
-        height: auto;
-        margin: 0 0 1 0;
-        align: left top;
-    }
-
-    .field-label {
-        width: 16;
-        min-width: 16;
-        color: %(text_muted)s;
-        padding: 1 1 0 0;
-    }
-
-    .field-input {
-        width: 1fr;
-        min-width: 0;
-    }
-
-    .field-stack {
-        width: 1fr;
-        min-width: 0;
-    }
-
-    #modal-alias,
-    #modal-path {
-        margin: 0;
-    }
-
-    #matches-panel {
-        width: 1fr;
-        min-width: 0;
-        height: auto;
-        margin: 1 0 0 0;
-        border: round %(border_subtle)s;
-        background: %(panel_bg)s;
-        padding: 0 1;
-    }
-
-    #matches-title {
-        color: %(text_muted)s;
-        padding: 0 0 1 0;
-    }
-
-    #matches-list {
-        height: 5;
-        padding: 0;
-        border: none;
-        background: transparent;
-    }
-
-    ListView > ListItem {
-        padding: 0;
-        background: transparent;
-        width: 1fr;
-    }
-
-    .directory-row {
-        width: 1fr;
-        padding: 0 1;
-        color: %(text_muted)s;
-    }
-
-    .directory-row.-selected {
-        background: %(selection_bg)s;
-        color: %(text_high)s;
-    }
-
-    #preview-title {
-        color: %(text_secondary)s;
-        text-style: bold;
-        padding: 0 0 1 0;
-    }
-
-    #preview-content {
-        color: %(text_muted)s;
-    }
-
-    .action-button {
-        width: auto;
-        min-width: 18;
-        color: %(text_button)s;
-        background: %(button_bg)s;
-        border: tall %(border)s;
-        content-align: center middle;
-        padding: 0 2;
-        margin: 0 1 0 0;
-    }
-
-    .action-button.-primary {
-        background: %(button_bg_primary)s;
-        border: tall %(button_border_primary)s;
-    }
-    """ % {
-        "app_bg": theme.APP_BG,
-        "border": theme.BORDER,
-        "border_subtle": theme.BORDER_SUBTLE,
-        "button_bg": theme.BUTTON_BG,
-        "button_bg_primary": theme.BUTTON_BG_PRIMARY,
-        "button_border_primary": theme.BUTTON_BORDER_PRIMARY,
-        "modal_bg": theme.MODAL_BG,
-        "overlay_bg": theme.OVERLAY_BG,
-        "panel_bg": theme.PANEL_BG,
-        "selection_bg": theme.SELECTION_BG,
-        "text_button": theme.TEXT_BUTTON,
-        "text_high": theme.TEXT_HIGH,
-        "text_muted": theme.TEXT_MUTED,
-        "text_primary": theme.TEXT_PRIMARY,
-        "text_secondary": theme.TEXT_SECONDARY,
-    }
-
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("tab", "tab_next", "Next Match", show=False, priority=True),
-        Binding("shift+tab", "tab_prev", "Prev Match", show=False, priority=True),
-        Binding("down", "next_match", show=False, priority=True),
-        Binding("up", "prev_match", show=False, priority=True),
-        Binding("ctrl+j", "next_match", show=False),
-        Binding("ctrl+k", "prev_match", show=False),
-    ]
-
-    def __init__(self, cwd: str) -> None:
-        super().__init__()
-        self.cwd = cwd
-        self._suggestion_paths: list[str] = []
-        self._suggestion_items: list[DirectorySuggestionItem] = []
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="add-modal"):
-            with Vertical(id="details-panel", classes="main-panel"):
-                yield Static("PROJECT DETAILS", classes="panel-title")
-                with Horizontal(classes="field-row"):
-                    yield Static("Project Name:", classes="field-label")
-                    yield Input(placeholder="Alias", id="modal-alias", classes="field-input")
-                with Horizontal(classes="field-row"):
-                    yield Static("Project Path:", classes="field-label")
-                    with Vertical(classes="field-stack"):
-                        yield Input(value=self.cwd, placeholder="Path", id="modal-path", classes="field-input")
-                        with Vertical(id="matches-panel"):
-                            yield Static("MATCHES (TAB TO NAVIGATE)", id="matches-title")
-                            yield ListView(id="matches-list")
-            with Vertical(id="preview-panel", classes="main-panel"):
-                yield Static("PATH PREVIEW", id="preview-title")
-                yield Static("", id="preview-path")
-                yield Static("", id="preview-content")
-            with Horizontal(id="actions-row"):
-                yield Static("[ CREATE PROJECT ]", classes="action-button -primary")
-                yield Static("[ CANCEL ]", classes="action-button")
-
-    def on_mount(self) -> None:
-        self._refresh_matches()
-        self.query_one("#modal-alias", Input).focus()
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-    def _display_path(self, path: str) -> str:
-        home = os.path.expanduser("~")
-        return path.replace(home, "~", 1) if path.startswith(home) else path
-
-    def _resolve_input_path(self) -> str:
-        raw = self.query_one("#modal-path", Input).value.strip()
-        if not raw:
-            return self.cwd
-        expanded = os.path.expanduser(raw)
-        if not os.path.isabs(expanded):
-            expanded = os.path.join(self.cwd, expanded)
-        return os.path.abspath(expanded)
-
-    def _selected_suggestion_path(self) -> Optional[str]:
-        list_view = self.query_one("#matches-list", ListView)
-        if not self._suggestion_paths:
-            return None
-        index = list_view.index or 0
-        if index < 0 or index >= len(self._suggestion_paths):
-            return None
-        return self._suggestion_paths[index]
-
-    def _set_selected_suggestion(self, index: Optional[int]) -> None:
-        for item_index, item in enumerate(self._suggestion_items):
-            item.set_selected(index is not None and item_index == index)
-
-    def _apply_selected_suggestion(self) -> bool:
-        selected_path = self._selected_suggestion_path()
-        if selected_path is None:
-            return False
-
-        path_input = self.query_one("#modal-path", Input)
-        current_resolved = self._resolve_input_path()
-
-        if os.path.normpath(current_resolved) == os.path.normpath(selected_path):
-            return False
-
-        path_input.value = self._display_path(selected_path)
-        path_input.focus()
-        self._refresh_matches()
-        return True
-
-    def _directory_matches(self) -> list[str]:
-        raw = self.query_one("#modal-path", Input).value
-        resolved = self._resolve_input_path()
-        typed = raw.strip()
-        if typed.endswith(os.sep):
-            base_dir = resolved
-            fragment = ""
-        else:
-            base_dir = os.path.dirname(resolved) or os.sep
-            fragment = os.path.basename(resolved)
-
-        if not os.path.isdir(base_dir):
-            return []
-
-        matches: list[str] = []
-        try:
-            with os.scandir(base_dir) as entries:
-                for entry in entries:
-                    if not entry.is_dir():
-                        continue
-                    if fragment and not entry.name.lower().startswith(fragment.lower()):
-                        continue
-                    matches.append(os.path.join(base_dir, entry.name))
-        except OSError:
-            return []
-
-        matches.sort(key=lambda path: os.path.basename(path).lower())
-        return matches[:8]
-
-    def _preview_lines(self, path: str) -> str:
-        if not os.path.isdir(path):
-            return "Directory not found yet."
-
-        lines: list[str] = []
-        try:
-            entries = sorted(os.scandir(path), key=lambda entry: (not entry.is_dir(), entry.name.lower()))
-            for entry in entries[:8]:
-                suffix = "/" if entry.is_dir() else ""
-                lines.append(f"{entry.name}{suffix}")
-        except OSError as error:
-            return f"Could not read directory: {error}"
-
-        if not lines:
-            return "(empty directory)"
-        return "\n".join(lines)
-
-    def _preview_target(self) -> str:
-        resolved = self._resolve_input_path()
-        if os.path.isdir(resolved):
-            return resolved
-        return self._selected_suggestion_path() or resolved
-
-    def _submission_path(self) -> str:
-        resolved = self._resolve_input_path()
-        if os.path.isdir(resolved):
-            return resolved
-        return self._selected_suggestion_path() or self.query_one("#modal-path", Input).value.strip() or self.cwd
-
-    def _refresh_preview(self) -> None:
-        target = self._preview_target()
-        display_path = shorten_path(self._display_path(target), 54)
-        self.query_one("#preview-title", Static).update(f"PATH PREVIEW: {display_path}")
-        self.query_one("#preview-path", Static).update("")
-        self.query_one("#preview-content", Static).update(self._preview_lines(target))
-
-    def _refresh_matches(self) -> None:
-        list_view = self.query_one("#matches-list", ListView)
-        list_view.clear()
-        self._suggestion_items = []
-        self._suggestion_paths = self._directory_matches()
-
-        for path in self._suggestion_paths:
-            item = DirectorySuggestionItem(path)
-            self._suggestion_items.append(item)
-            list_view.append(item)
-
-        if self._suggestion_paths:
-            list_view.index = 0
-            self._set_selected_suggestion(0)
-        else:
-            self._set_selected_suggestion(None)
-
-        self._refresh_preview()
-
-    def action_tab_next(self) -> None:
-        if self.focused is self.query_one("#modal-alias", Input):
-            self.query_one("#modal-path", Input).focus()
-            return
-        self.action_next_match()
-
-    def action_tab_prev(self) -> None:
-        if self.focused is self.query_one("#modal-path", Input):
-            self.query_one("#modal-alias", Input).focus()
-            return
-        self.action_prev_match()
-
-    def action_next_match(self) -> None:
-        if not self._suggestion_paths:
-            return
-        list_view = self.query_one("#matches-list", ListView)
-        current_index = list_view.index or 0
-        next_index = (current_index + 1) % len(self._suggestion_paths)
-        list_view.index = next_index
-        self._set_selected_suggestion(next_index)
-        self._refresh_preview()
-
-    def action_prev_match(self) -> None:
-        if not self._suggestion_paths:
-            return
-        list_view = self.query_one("#matches-list", ListView)
-        current_index = list_view.index or 0
-        next_index = (current_index - 1) % len(self._suggestion_paths)
-        list_view.index = next_index
-        self._set_selected_suggestion(next_index)
-        self._refresh_preview()
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "modal-path":
-            self._refresh_matches()
-
-    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
-        if event.list_view.id != "matches-list":
-            return
-        self._set_selected_suggestion(event.list_view.index)
-        self._refresh_preview()
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "modal-alias":
-            alias = event.value.strip()
-            if not alias:
-                return
-            self.query_one("#modal-path", Input).focus()
-            return
-
-        if self._apply_selected_suggestion():
-            return
-
-        alias = self.query_one("#modal-alias", Input).value.strip()
-        path = self._submission_path()
-        if not alias:
-            self.query_one("#modal-alias", Input).focus()
-            return
-        self.dismiss((alias, path))
-
-
-CSS = """
-Screen {
-    background: %(app_bg)s;
-}
-
-#search-input {
-    margin: 0 0 1 0;
-}
-
-#projects-list {
-    border: round %(border)s;
-    padding: 1;
-    background: %(panel_bg)s;
-}
-
-#projects-list:focus-within {
-    border: round %(border_focus)s;
-}
-
-#empty-state {
-    color: %(text_subtle)s;
-    padding: 1 2;
-}
-
-#status {
-    color: %(text_error_soft)s;
-    padding: 1 2 0 2;
-}
-
-ListView > ListItem {
-    padding: 0;
-    background: transparent;
-    width: 1fr;
-    height: auto;
-    margin: 0 0 1 0;
-}
-
-.project-row {
-    width: 1fr;
-    height: auto;
-    min-height: 3;
-    padding: 0 1 1 1;
-    background: transparent;
-    align: left top;
-}
-
-.project-row.-selected {
-    background: %(row_selection_bg)s;
-    border-left: wide %(accent)s;
-    padding: 1 1 1 1;
-}
-
-.project-icon {
-    width: 3;
-    padding: 0 0 0 0;
-    color: %(text_icon)s;
-    text-style: bold;
-}
-
-.project-row.-selected .project-icon {
-    color: %(accent_soft)s;
-}
-
-.project-content {
-    width: 1fr;
-    height: auto;
-    padding: 0;
-}
-
-.project-alias {
-    color: %(text_primary)s;
-    text-style: bold;
-    padding: 0;
-    height: auto;
-}
-
-.project-path {
-    color: %(text_muted)s;
-    padding: 0;
-    height: auto;
-}
-
-.project-meta {
-    color: %(text_subtle)s;
-    padding: 0;
-    height: auto;
-}
-
-.project-row.-selected .project-alias {
-    color: %(text_high)s;
-}
-
-.project-row.-selected .project-meta {
-    color: %(accent_pale)s;
-}
-
-.project-row.-selected .project-path {
-    color: %(text_secondary)s;
-}
-""" % {
-    "accent": theme.ACCENT,
-    "accent_pale": theme.ACCENT_PALE,
-    "accent_soft": theme.ACCENT_SOFT,
-    "app_bg": theme.APP_BG,
-    "border": theme.BORDER,
-    "border_focus": theme.BORDER_FOCUS,
-    "panel_bg": theme.PANEL_BG,
-    "row_selection_bg": theme.ROW_SELECTION_BG,
-    "text_error_soft": theme.TEXT_ERROR_SOFT,
-    "text_high": theme.TEXT_HIGH,
-    "text_icon": theme.TEXT_ICON,
-    "text_muted": theme.TEXT_MUTED,
-    "text_primary": theme.TEXT_PRIMARY,
-    "text_secondary": theme.TEXT_SECONDARY,
-    "text_subtle": theme.TEXT_SUBTLE,
-}
+try:
+    from .projects_modal import AddWorkspaceModal
+    from .projects_widgets import PROJECTS_LIST_CSS, ProjectListItem, WorkspaceListItem
+except ImportError:
+    from projects_modal import AddWorkspaceModal
+    from projects_widgets import PROJECTS_LIST_CSS, ProjectListItem, WorkspaceListItem
+
+T = TypeVar("T")
 
 
 class ProjectsApp(App):
-    CSS = CSS
+    CSS = PROJECTS_LIST_CSS
 
     BINDINGS = [
         Binding("escape", "close_or_cancel", "Close"),
@@ -672,7 +110,7 @@ class ProjectsApp(App):
                 else:
                     self._workspaces = active_project.workspaces
             self._sync_list(clear_status=True)
-        except Exception as error:
+        except (OSError, ValueError, TypeError, KeyError) as error:
             self._projects = []
             self._filtered_projects = []
             self._workspaces = []
@@ -767,27 +205,17 @@ class ProjectsApp(App):
     def _set_status(self, message: str) -> None:
         self.query_one("#status", Static).update(message)
 
+    def _selected_item(self, items: Sequence[T]) -> T | None:
+        if not items:
+            return None
+        index = self.query_one("#projects-list", ListView).index or 0
+        return items[index] if 0 <= index < len(items) else None
+
     def _selected_project(self) -> ProjectInfo | None:
-        if self._mode != "projects":
-            return None
-        list_view = self.query_one("#projects-list", ListView)
-        if not self._filtered_projects:
-            return None
-        index = list_view.index or 0
-        if index < 0 or index >= len(self._filtered_projects):
-            return None
-        return self._filtered_projects[index]
+        return self._selected_item(self._filtered_projects) if self._mode == "projects" else None
 
     def _selected_workspace(self) -> WorkspaceInfo | None:
-        if self._mode != "workspaces":
-            return None
-        list_view = self.query_one("#projects-list", ListView)
-        if not self._filtered_workspaces:
-            return None
-        index = list_view.index or 0
-        if index < 0 or index >= len(self._filtered_workspaces):
-            return None
-        return self._filtered_workspaces[index]
+        return self._selected_item(self._filtered_workspaces) if self._mode == "workspaces" else None
 
     def _cli_path(self) -> str:
         repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -957,6 +385,32 @@ class ProjectsApp(App):
         self.query_one("#projects-list", ListView).focus()
         self._set_status(result.stdout.strip() or f'Saved project "{alias}".')
 
+    def _open_selected_target(self, *, in_tab: bool) -> None:
+        flag = "--tab" if in_tab else "--current-session"
+        tab_label = " in a new tab" if in_tab else ""
+
+        if self._mode == "workspaces":
+            project = self._active_project()
+            workspace = self._selected_workspace()
+            if project is None or workspace is None:
+                return
+            args = ["workspace", "open", project.alias, workspace.name, flag]
+            fallback = f"Could not open workspace{tab_label}."
+        else:
+            project = self._selected_project()
+            if not project:
+                return
+            args = ["project", "open", project.alias, flag]
+            fallback = f"Could not open project{tab_label}."
+
+        result = self._run_cli(args)
+        if result is None:
+            return
+        if result.returncode != 0:
+            self._set_status(result.stderr.strip() or result.stdout.strip() or fallback)
+            return
+        self.exit()
+
     def action_delete_selected(self) -> None:
         if self._mode != "projects":
             self._set_status("Workspace removal is available through the CLI for now.")
@@ -984,58 +438,10 @@ class ProjectsApp(App):
         self._set_status(result.stdout.strip() or f'Removed project "{project.alias}".')
 
     def action_open_selected(self) -> None:
-        if self._mode == "workspaces":
-            project = self._active_project()
-            workspace = self._selected_workspace()
-            if project is None or workspace is None:
-                return
-            result = self._run_cli(["workspace", "open", project.alias, workspace.name, "--current-session"])
-            if result is None:
-                return
-            if result.returncode != 0:
-                self._set_status(result.stderr.strip() or result.stdout.strip() or "Could not open workspace.")
-                return
-            self.exit()
-            return
-
-        project = self._selected_project()
-        if not project:
-            return
-
-        result = self._run_cli(["project", "open", project.alias, "--current-session"])
-        if result is None:
-            return
-        if result.returncode != 0:
-            self._set_status(result.stderr.strip() or result.stdout.strip() or "Could not open project.")
-            return
-        self.exit()
+        self._open_selected_target(in_tab=False)
 
     def action_open_selected_in_tab(self) -> None:
-        if self._mode == "workspaces":
-            project = self._active_project()
-            workspace = self._selected_workspace()
-            if project is None or workspace is None:
-                return
-            result = self._run_cli(["workspace", "open", project.alias, workspace.name, "--tab"])
-            if result is None:
-                return
-            if result.returncode != 0:
-                self._set_status(result.stderr.strip() or result.stdout.strip() or "Could not open workspace in a new tab.")
-                return
-            self.exit()
-            return
-
-        project = self._selected_project()
-        if not project:
-            return
-
-        result = self._run_cli(["project", "open", project.alias, "--tab"])
-        if result is None:
-            return
-        if result.returncode != 0:
-            self._set_status(result.stderr.strip() or result.stdout.strip() or "Could not open project in a new tab.")
-            return
-        self.exit()
+        self._open_selected_target(in_tab=True)
 
 
 if __name__ == "__main__":
