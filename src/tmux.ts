@@ -368,24 +368,12 @@ export function focusOrOpenSidecar(cwd: string, sessionId: string = ""): void {
 }
 
 function resolveSidecarToggleTargetPane(cwd: string, sessionId: string, currentPane: string): string {
-  if (currentPane && !isLatchPane(cwd, sessionId, currentPane)) {
-    return currentPane;
-  }
-
   const savedTargetPane = getSidecarTargetPaneId(cwd, sessionId);
   if (savedTargetPane && isPaneInCurrentSession(savedTargetPane)) {
     return savedTargetPane;
   }
 
   return currentPane;
-}
-
-function isLatchPane(cwd: string, sessionId: string, paneId: string): boolean {
-  return [
-    getSidecarPaneId(cwd, sessionId),
-    getTrayPaneId(cwd, sessionId),
-    getWorkspacesPaneId(cwd),
-  ].includes(paneId);
 }
 
 // ── chat popup ──────────────────────────────────────────────────────────────

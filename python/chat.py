@@ -17,6 +17,7 @@ import textwrap
 from datetime import datetime, timezone
 from typing import Optional
 
+from latch import theme
 from latch.session_store import Message, SessionInfo, list_sessions, parse_messages
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -43,11 +44,7 @@ TOOL_ICONS = {
     "Skill": "\u2605",       # ★
 }
 
-MODEL_COLORS = {
-    "opus": ("#C084FC", "#3B1F5B"),
-    "sonnet": ("#86EFAC", "#14532D"),
-    "haiku": ("#93C5FD", "#1E3A5F"),
-}
+MODEL_COLORS = theme.MODEL_BADGE_COLORS
 
 # ── Formatting helpers ───────────────────────────────────────────────────────
 
@@ -130,11 +127,11 @@ def _append_inline(text: Text, s: str) -> None:
         if not part:
             continue
         if part.startswith("**") and part.endswith("**") and len(part) > 4:
-            text.append(part[2:-2], style="bold #F9FAFB")
+            text.append(part[2:-2], style=f"bold {theme.TEXT_BRIGHT}")
         elif part.startswith("*") and part.endswith("*") and len(part) > 2:
-            text.append(part[1:-1], style="italic #E5E7EB")
+            text.append(part[1:-1], style=f"italic {theme.TEXT_PRIMARY}")
         elif part.startswith("`") and part.endswith("`") and len(part) > 2:
-            text.append(part[1:-1], style="#F97316")
+            text.append(part[1:-1], style=theme.INLINE_CODE)
         else:
             text.append(part)
 
@@ -145,7 +142,7 @@ def _wrap_inline(
     first_prefix: str,
     cont_prefix: str,
     wrap_w: int,
-    prefix_style: str = "#6B7280",
+    prefix_style: str = theme.TEXT_SUBTLE,
 ) -> None:
     """Word-wrap content with inline markdown styling.
     First line gets first_prefix (styled), continuation lines get cont_prefix."""
@@ -195,7 +192,7 @@ def _append_md(text: Text, content: str, indent: str, wrap_w: int) -> None:
             continue
 
         if in_code:
-            text.append(f"{indent}  {raw}\n", style="#D1D5DB on #1F2937")
+            text.append(f"{indent}  {raw}\n", style=f"{theme.CODE_BLOCK_FG} on {theme.SURFACE_BG}")
             continue
 
         # Empty line
@@ -213,7 +210,7 @@ def _append_md(text: Text, content: str, indent: str, wrap_w: int) -> None:
 
         # Horizontal rule
         if re.match(r"^[-*_]{3,}$", raw.strip()):
-            text.append(f"{indent}{'─' * 24}\n", style="#374151")
+            text.append(f"{indent}{'─' * 24}\n", style=theme.SELECTION_BG)
             continue
 
         # Bullet list — continuation aligns with text after "• "
@@ -247,29 +244,29 @@ def render_one_message(msg: Message, selected: bool = False, thinking_expanded: 
 
     # Cursor prefix
     if selected:
-        text.append("> ", style="bold #F59E0B")
+        text.append("> ", style=f"bold {theme.WARNING}")
     else:
         text.append("  ")
 
     if msg.role == "user":
-        text.append(ts_str, style="#6B7280")
-        text.append("you", style="bold #10B981")
+        text.append(ts_str, style=theme.TEXT_SUBTLE)
+        text.append("you", style=f"bold {theme.SUCCESS}")
         text.append("\n")
         # Blank line between header and content (matches sidecar)
         if msg.blocks:
             text.append("\n")
     else:
-        text.append(ts_str, style="#6B7280")
-        text.append("claude", style="bold #3B82F6")
+        text.append(ts_str, style=theme.TEXT_SUBTLE)
+        text.append("claude", style=f"bold {theme.INFO_STRONG}")
         ms = model_short(msg.model)
         if ms:
             text.append(" ")  # single space before badge (matches sidecar)
-            fg, bg = MODEL_COLORS.get(ms, ("#93C5FD", "#1E3A5F"))
+            fg, bg = MODEL_COLORS.get(ms, theme.MODEL_BADGE_FALLBACK)
             text.append(f" {ms} ", style=f"{fg} on {bg}")
         if msg.tokens_in or msg.tokens_out:
             text.append(
                 f" in:{format_k(msg.tokens_in)} out:{format_k(msg.tokens_out)}",
-                style="#6B7280",
+                style=theme.TEXT_SUBTLE,
             )
         text.append("\n")
 
@@ -296,9 +293,9 @@ def render_one_message(msg: Message, selected: bool = False, thinking_expanded: 
         elif block.kind == "thinking":
             tc = format_k(block.token_count) if block.token_count else "?"
             if thinking_expanded:
-                text.append("  \u25c8 ", style="italic #C084FC")
-                text.append(f"thinking ({tc} tokens) \u25bc", style="italic #C084FC")
-                text.append("  [enter to collapse]\n", style="#4B5563")
+                text.append("  \u25c8 ", style=f"italic {theme.THINKING}")
+                text.append(f"thinking ({tc} tokens) \u25bc", style=f"italic {theme.THINKING}")
+                text.append("  [enter to collapse]\n", style=theme.TEXT_FAINT)
                 term_w = shutil.get_terminal_size((120, 40)).columns
                 wrap_w = max(40, int(term_w * 0.68) - 10)
                 for tline in block.text.splitlines():
@@ -306,28 +303,28 @@ def render_one_message(msg: Message, selected: bool = False, thinking_expanded: 
                         wrapped = textwrap.fill(tline, width=wrap_w,
                                                 initial_indent="    ",
                                                 subsequent_indent="    ")
-                        text.append(wrapped + "\n", style="#9CA3AF")
+                        text.append(wrapped + "\n", style=theme.TEXT_SOFT)
                     else:
                         text.append("\n")
             else:
                 preview = " ".join(block.text.split())
                 if len(preview) > 80:
                     preview = preview[:77] + "..."
-                text.append("  \u25c8 ", style="italic #C084FC")
-                text.append(f"thinking ({tc} tokens) \u25b6", style="italic #C084FC")
+                text.append("  \u25c8 ", style=f"italic {theme.THINKING}")
+                text.append(f"thinking ({tc} tokens) \u25b6", style=f"italic {theme.THINKING}")
                 if preview:
-                    text.append(f" {preview}", style="#6B7280")
+                    text.append(f" {preview}", style=theme.TEXT_SUBTLE)
                 text.append("\n")
         elif block.kind == "tool_use":
             icon = TOOL_ICONS.get(block.tool_name, "\u2699")
             if block.is_error:
-                text.append("  \u2717 ", style="#EF4444")
-                text.append(f"{block.tool_name}", style="#EF4444")
+                text.append("  \u2717 ", style=theme.ERROR)
+                text.append(f"{block.tool_name}", style=theme.ERROR)
             else:
-                text.append(f"  {icon} ", style="#6B7280")
-                text.append(f"{block.tool_name}", style="#93C5FD")
+                text.append(f"  {icon} ", style=theme.TEXT_SUBTLE)
+                text.append(f"{block.tool_name}", style=theme.INFO)
             if block.tool_file:
-                text.append(f": {block.tool_file}", style="#6B7280")
+                text.append(f": {block.tool_file}", style=theme.TEXT_SUBTLE)
             text.append("\n")
             # Output preview — wrap with hanging indent so continuation stays aligned
             if block.text:
@@ -338,7 +335,7 @@ def render_one_message(msg: Message, selected: bool = False, thinking_expanded: 
                     initial_indent="    \u2192 ",
                     subsequent_indent="      ",
                 )
-                text.append(wrapped + "\n", style="#6B7280")
+                text.append(wrapped + "\n", style=theme.TEXT_SUBTLE)
 
     text.append("\n")  # spacing between messages
     return text
@@ -349,7 +346,7 @@ def render_session_header(session: SessionInfo, messages: list[Message]) -> Text
     text = Text()
 
     # Line 1: icon + label (no indent, matches sidecar)
-    text.append("\u25c6 ", style="#F59E0B")
+    text.append("\u25c6 ", style=theme.WARNING)
     text.append(session.label, style="bold")
     text.append("\n")
 
@@ -364,36 +361,36 @@ def render_session_header(session: SessionInfo, messages: list[Message]) -> Text
             break
 
     # Stats joined with " │ " (single space each side, matches sidecar)
-    pipe = (" \u2502 ", "#4B5563")
+    pipe = (" \u2502 ", theme.TEXT_FAINT)
     first = True
 
     if model:
-        fg, bg = MODEL_COLORS.get(model, ("#93C5FD", "#1E3A5F"))
+        fg, bg = MODEL_COLORS.get(model, theme.MODEL_BADGE_FALLBACK)
         text.append(f" {model} ", style=f"{fg} on {bg}")
         first = False
 
     if not first:
         text.append(*pipe)
-    text.append(f"{msg_count} msgs", style="#6B7280")
+    text.append(f"{msg_count} msgs", style=theme.TEXT_SUBTLE)
 
     text.append(*pipe)
-    text.append(f"in:{format_k(total_in)} out:{format_k(total_out)}", style="#6B7280")
+    text.append(f"in:{format_k(total_in)} out:{format_k(total_out)}", style=theme.TEXT_SUBTLE)
 
     if session.timestamp:
         text.append(*pipe)
-        text.append(session.timestamp.astimezone().strftime("%b %d %H:%M"), style="#6B7280")
+        text.append(session.timestamp.astimezone().strftime("%b %d %H:%M"), style=theme.TEXT_SUBTLE)
 
     text.append("\n")
 
     # Line 3: resume command + [Y:copy] hint (matches sidecar)
-    text.append("claude --resume ", style="#93C5FD")
-    text.append(session.session_id, style="#93C5FD")
+    text.append("claude --resume ", style=theme.INFO)
+    text.append(session.session_id, style=theme.INFO)
     text.append("  ", style="")
-    text.append("[Y:copy]", style="#4B5563")
+    text.append("[Y:copy]", style=theme.TEXT_FAINT)
     text.append("\n")
 
     # Separator line — 20 chars matches sidecar's min(contentWidth/3, 20)
-    text.append("\u2500" * 20 + "\n\n", style="#374151")
+    text.append("\u2500" * 20 + "\n\n", style=theme.SELECTION_BG)
 
     return text
 
@@ -437,16 +434,16 @@ class SessionListItem(ListItem):
         size = format_size(session.file_size)
         parts = []
         if dur:
-            parts.append(f"[#6B7280]{dur}[/]")
+            parts.append(f"[{theme.TEXT_SUBTLE}]{dur}[/]")
         if size:
-            parts.append(f"[#4B5563]{size}[/]")
+            parts.append(f"[{theme.TEXT_FAINT}]{size}[/]")
         stats = "  " + "  ".join(parts) if parts else ""
-        super().__init__(Static(f"[#F59E0B]\u25c6[/] {label}{stats}"))
+        super().__init__(Static(f"[{theme.WARNING}]\u25c6[/] {label}{stats}"))
 
 
 class GroupHeader(ListItem):
     def __init__(self, label: str) -> None:
-        markup = f"[bold #F59E0B]{label}[/]" if label else ""
+        markup = f"[bold {theme.WARNING}]{label}[/]" if label else ""
         super().__init__(Static(markup))
         self.disabled = True
 
@@ -469,13 +466,16 @@ class LoadMoreItem(ListItem):
         padding: 1 0;
     }
     LoadMoreItem.-highlight Static {
-        background: #1F2937;
-        color: #F59E0B;
+        background: %(surface_bg)s;
+        color: %(warning)s;
     }
-    """
+    """ % {
+        "surface_bg": theme.SURFACE_BG,
+        "warning": theme.WARNING,
+    }
 
     def __init__(self) -> None:
-        super().__init__(Static("[#6B7280]─── [bold]↑ load older messages[/bold] (enter) ───[/]"))
+        super().__init__(Static(f"[{theme.TEXT_SUBTLE}]─── [bold]↑ load older messages[/bold] (enter) ───[/]"))
 
 
 class TurnSeparatorItem(ListItem):
@@ -494,7 +494,7 @@ class TurnSeparatorItem(ListItem):
 
     def __init__(self) -> None:
         super().__init__(Static("  " + "─" * 20, markup=False))
-        self.styles.color = "#374151"
+        self.styles.color = theme.SELECTION_BG
         self.disabled = True
 
 
@@ -523,7 +523,7 @@ class MessageItem(ListItem):
     def set_selected(self, selected: bool) -> None:
         self._selected = selected
         self._refresh()
-        bg = "#374151" if selected else "transparent"
+        bg = theme.SELECTION_BG if selected else "transparent"
         self.styles.background = bg
         self.query_one(Static).styles.background = bg
 
@@ -549,24 +549,24 @@ class MessageItem(ListItem):
 
 CSS = """
 Screen {
-    background: #111827;
+    background: %(app_bg)s;
 }
 
 #left-panel {
-    width: 30%;
-    border: round #4B5563;
+    width: 30%%;
+    border: round %(border)s;
     padding: 0 1;
 }
 
 #left-panel:focus-within {
-    border: round #7C3AED;
+    border: round %(border_focus)s;
 }
 
 #search-input {
     height: 1;
     border: none;
-    background: #1F2937;
-    color: #F9FAFB;
+    background: %(surface_bg)s;
+    color: %(text_bright)s;
     padding: 0 1;
     margin: 0 0 1 0;
 }
@@ -579,13 +579,13 @@ Screen {
 }
 
 #right-panel {
-    width: 70%;
-    border: round #4B5563;
+    width: 70%%;
+    border: round %(border)s;
     padding: 0;
 }
 
 #right-panel:focus-within {
-    border: round #7C3AED;
+    border: round %(border_focus)s;
 }
 
 #session-header {
@@ -601,17 +601,25 @@ Screen {
 }
 
 #msg-empty {
-    color: #4B5563;
+    color: %(text_faint)s;
     padding: 1 2;
 }
 
 ListView > ListItem {
     padding: 0;
     background: transparent;
-    color: #9CA3AF;
+    color: %(text_soft)s;
     width: 1fr;
 }
-"""
+""" % {
+    "app_bg": theme.APP_BG,
+    "border": theme.BORDER,
+    "border_focus": theme.BORDER_FOCUS,
+    "surface_bg": theme.SURFACE_BG,
+    "text_bright": theme.TEXT_BRIGHT,
+    "text_faint": theme.TEXT_FAINT,
+    "text_soft": theme.TEXT_SOFT,
+}
 
 
 class ChatApp(App):
@@ -847,14 +855,14 @@ class ChatApp(App):
                 try:
                     s = self._highlighted_session_item.query_one(Static)
                     s.styles.background = "transparent"
-                    s.styles.color = "#9CA3AF"
+                    s.styles.color = theme.TEXT_SOFT
                 except Exception:
                     pass
             if isinstance(event.item, SessionListItem):
                 try:
                     s = event.item.query_one(Static)
-                    s.styles.background = "#374151"
-                    s.styles.color = "#F9FAFB"
+                    s.styles.background = theme.SELECTION_BG
+                    s.styles.color = theme.TEXT_BRIGHT
                 except Exception:
                     pass
                 self._highlighted_session_item = event.item

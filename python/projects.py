@@ -14,6 +14,7 @@ import subprocess
 import sys
 from typing import Optional, Tuple
 
+from latch import theme
 from latch.projects_store import ProjectInfo, WorkspaceInfo, load_projects
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -78,7 +79,7 @@ class DirectorySuggestionItem(ListItem):
         self.path = path
         name = os.path.basename(path.rstrip(os.sep)) or path
         parent = shorten_path(os.path.dirname(path), 24)
-        label = f"[bold #E5E7EB]{name}/[/] [#64748B]{parent}[/]"
+        label = f"[bold {theme.TEXT_PRIMARY}]{name}/[/] [{theme.TEXT_SUBTLE}]{parent}[/]"
         self._row = Static(label, classes="directory-row")
 
     def compose(self) -> ComposeResult:
@@ -92,21 +93,21 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
     CSS = """
     AddWorkspaceModal {
         align: center middle;
-        background: rgba(3, 7, 18, 0.72);
+        background: %(overlay_bg)s;
     }
 
     #add-modal {
         width: 84;
         min-width: 60;
-        max-width: 96%;
+        max-width: 96%%;
         height: auto;
-        background: #0F172A;
+        background: %(modal_bg)s;
         padding: 0;
     }
 
     .main-panel {
-        border: round #4B5563;
-        background: #111827;
+        border: round %(border)s;
+        background: %(app_bg)s;
         padding: 1 2;
     }
 
@@ -126,7 +127,7 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
     }
 
     .panel-title {
-        color: #CBD5E1;
+        color: %(text_secondary)s;
         text-style: bold;
         padding: 0 0 1 0;
     }
@@ -140,7 +141,7 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
     .field-label {
         width: 16;
         min-width: 16;
-        color: #94A3B8;
+        color: %(text_muted)s;
         padding: 1 1 0 0;
     }
 
@@ -164,13 +165,13 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
         min-width: 0;
         height: auto;
         margin: 1 0 0 0;
-        border: round #334155;
-        background: #0B1220;
+        border: round %(border_subtle)s;
+        background: %(panel_bg)s;
         padding: 0 1;
     }
 
     #matches-title {
-        color: #94A3B8;
+        color: %(text_muted)s;
         padding: 0 0 1 0;
     }
 
@@ -190,40 +191,56 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
     .directory-row {
         width: 1fr;
         padding: 0 1;
-        color: #94A3B8;
+        color: %(text_muted)s;
     }
 
     .directory-row.-selected {
-        background: #374151;
-        color: #F8FAFC;
+        background: %(selection_bg)s;
+        color: %(text_high)s;
     }
 
     #preview-title {
-        color: #CBD5E1;
+        color: %(text_secondary)s;
         text-style: bold;
         padding: 0 0 1 0;
     }
 
     #preview-content {
-        color: #94A3B8;
+        color: %(text_muted)s;
     }
 
     .action-button {
         width: auto;
         min-width: 18;
-        color: #E2E8F0;
-        background: #243041;
-        border: tall #4B5563;
+        color: %(text_button)s;
+        background: %(button_bg)s;
+        border: tall %(border)s;
         content-align: center middle;
         padding: 0 2;
         margin: 0 1 0 0;
     }
 
     .action-button.-primary {
-        background: #334155;
-        border: tall #64748B;
+        background: %(button_bg_primary)s;
+        border: tall %(button_border_primary)s;
     }
-    """
+    """ % {
+        "app_bg": theme.APP_BG,
+        "border": theme.BORDER,
+        "border_subtle": theme.BORDER_SUBTLE,
+        "button_bg": theme.BUTTON_BG,
+        "button_bg_primary": theme.BUTTON_BG_PRIMARY,
+        "button_border_primary": theme.BUTTON_BORDER_PRIMARY,
+        "modal_bg": theme.MODAL_BG,
+        "overlay_bg": theme.OVERLAY_BG,
+        "panel_bg": theme.PANEL_BG,
+        "selection_bg": theme.SELECTION_BG,
+        "text_button": theme.TEXT_BUTTON,
+        "text_high": theme.TEXT_HIGH,
+        "text_muted": theme.TEXT_MUTED,
+        "text_primary": theme.TEXT_PRIMARY,
+        "text_secondary": theme.TEXT_SECONDARY,
+    }
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
@@ -459,7 +476,7 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
 
 CSS = """
 Screen {
-    background: #111827;
+    background: %(app_bg)s;
 }
 
 #search-input {
@@ -467,22 +484,22 @@ Screen {
 }
 
 #projects-list {
-    border: round #4B5563;
+    border: round %(border)s;
     padding: 1;
-    background: #0B1220;
+    background: %(panel_bg)s;
 }
 
 #projects-list:focus-within {
-    border: round #7C3AED;
+    border: round %(border_focus)s;
 }
 
 #empty-state {
-    color: #6B7280;
+    color: %(text_subtle)s;
     padding: 1 2;
 }
 
 #status {
-    color: #FCA5A5;
+    color: %(text_error_soft)s;
     padding: 1 2 0 2;
 }
 
@@ -504,20 +521,20 @@ ListView > ListItem {
 }
 
 .project-row.-selected {
-    background: #172033;
-    border-left: wide #7C3AED;
+    background: %(row_selection_bg)s;
+    border-left: wide %(accent)s;
     padding: 1 1 1 1;
 }
 
 .project-icon {
     width: 3;
     padding: 0 0 0 0;
-    color: #475569;
+    color: %(text_icon)s;
     text-style: bold;
 }
 
 .project-row.-selected .project-icon {
-    color: #A78BFA;
+    color: %(accent_soft)s;
 }
 
 .project-content {
@@ -527,36 +544,52 @@ ListView > ListItem {
 }
 
 .project-alias {
-    color: #E5E7EB;
+    color: %(text_primary)s;
     text-style: bold;
     padding: 0;
     height: auto;
 }
 
 .project-path {
-    color: #94A3B8;
+    color: %(text_muted)s;
     padding: 0;
     height: auto;
 }
 
 .project-meta {
-    color: #64748B;
+    color: %(text_subtle)s;
     padding: 0;
     height: auto;
 }
 
 .project-row.-selected .project-alias {
-    color: #F8FAFC;
+    color: %(text_high)s;
 }
 
 .project-row.-selected .project-meta {
-    color: #A5B4FC;
+    color: %(accent_pale)s;
 }
 
 .project-row.-selected .project-path {
-    color: #CBD5E1;
+    color: %(text_secondary)s;
 }
-"""
+""" % {
+    "accent": theme.ACCENT,
+    "accent_pale": theme.ACCENT_PALE,
+    "accent_soft": theme.ACCENT_SOFT,
+    "app_bg": theme.APP_BG,
+    "border": theme.BORDER,
+    "border_focus": theme.BORDER_FOCUS,
+    "panel_bg": theme.PANEL_BG,
+    "row_selection_bg": theme.ROW_SELECTION_BG,
+    "text_error_soft": theme.TEXT_ERROR_SOFT,
+    "text_high": theme.TEXT_HIGH,
+    "text_icon": theme.TEXT_ICON,
+    "text_muted": theme.TEXT_MUTED,
+    "text_primary": theme.TEXT_PRIMARY,
+    "text_secondary": theme.TEXT_SECONDARY,
+    "text_subtle": theme.TEXT_SUBTLE,
+}
 
 
 class ProjectsApp(App):

@@ -16,6 +16,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 
+from latch import theme
 from latch.ipc import build_socket_path, cleanup_socket, send_json_message, start_ipc_server
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -74,15 +75,15 @@ FILE_ICON = ">"
 
 def _file_status_char(f: dict) -> str:
     if f.get("isNew"):
-        return "[bold #10B981]+[/]"
+        return f"[bold {theme.SUCCESS}]+[/]"
     if f.get("backupFile") is None and not f.get("isNew"):
-        return "[bold #EF4444]x[/]"
-    return "[bold #10B981]v[/]"
+        return f"[bold {theme.ERROR}]x[/]"
+    return f"[bold {theme.SUCCESS}]v[/]"
 
 
 def render_card(turn: TurnData, selected: bool) -> Text:
     """Render a single turn card as Rich Text."""
-    border_color = "#7C3AED" if selected else "#4B5563"
+    border_color = theme.ACCENT if selected else theme.BORDER
     dim = turn.reverted
 
     lines: list[str] = []
@@ -94,7 +95,7 @@ def render_card(turn: TurnData, selected: bool) -> Text:
     label = turn.label
     if len(label) > CARD_WIDTH - 6:
         label = label[: CARD_WIDTH - 9] + "..."
-    status_dot = "[#6B7280]●[/]" if turn.reverted else "[#7C3AED]●[/]"
+    status_dot = f"[{theme.TEXT_SUBTLE}]●[/]" if turn.reverted else f"[{theme.ACCENT}]●[/]"
     lines.append(f" {status_dot} {label}")
 
     # Stats line
@@ -102,8 +103,8 @@ def render_card(turn: TurnData, selected: bool) -> Text:
     removed = turn.diff_stats.get("removed", 0)
     file_count = len(turn.files)
     stats = (
-        f" [#6B7280]{file_count} file{'s' if file_count != 1 else ''}[/]"
-        f"  [#10B981]+{added}[/] / [#EF4444]-{removed}[/]"
+        f" [{theme.TEXT_SUBTLE}]{file_count} file{'s' if file_count != 1 else ''}[/]"
+        f"  [{theme.SUCCESS}]+{added}[/] / [{theme.ERROR}]-{removed}[/]"
     )
     lines.append(stats)
 
@@ -118,20 +119,23 @@ def render_card(turn: TurnData, selected: bool) -> Text:
         if len(base) > CARD_WIDTH - 8:
             base = base[: CARD_WIDTH - 11] + "..."
         icon_markup = _file_status_char(f)
-        lines.append(f" [#6B7280]{FILE_ICON}[/] {base:<{CARD_WIDTH - 8}} {icon_markup}")
+        lines.append(f" [{theme.TEXT_SUBTLE}]{FILE_ICON}[/] {base:<{CARD_WIDTH - 8}} {icon_markup}")
 
     if len(turn.files) > 5:
         extra = len(turn.files) - 5
-        lines.append(f" [#6B7280]  ... and {extra} more[/]")
+        lines.append(f" [{theme.TEXT_SUBTLE}]  ... and {extra} more[/]")
 
     # Blank line
     lines.append("")
 
     # Action hints
     if turn.reverted:
-        lines.append(" [#6B7280](reverted)[/]")
+        lines.append(f" [{theme.TEXT_SUBTLE}](reverted)[/]")
     else:
-        lines.append(" [#6B7280][[/][#F59E0B]r[/][#6B7280]] revert  [[/][#F59E0B]↵[/][#6B7280]] review[/]")
+        lines.append(
+            f" [{theme.TEXT_SUBTLE}][[/][{theme.WARNING}]r[/][{theme.TEXT_SUBTLE}]]"
+            f" revert  [[/][{theme.WARNING}]↵[/][{theme.TEXT_SUBTLE}]] review[/]"
+        )
 
     # Bottom border
     lines.append(f"[{border_color}]{'─' * (CARD_WIDTH - 2)}[/]")
@@ -154,10 +158,10 @@ class TurnCard(Static):
         height: auto;
         margin: 1 1;
         padding: 1;
-        border: round #4B5563;
+        border: round {theme.BORDER};
     }}
     TurnCard.selected {{
-        border: round #7C3AED;
+        border: round {theme.ACCENT};
     }}
     """
 
@@ -179,7 +183,7 @@ class TurnCard(Static):
 
 CSS = """
 Screen {
-    background: #111827;
+    background: %(app_bg)s;
 }
 
 #tray-scroll {
@@ -194,11 +198,14 @@ Screen {
 }
 
 #empty-hint {
-    color: #4B5563;
+    color: %(text_faint)s;
     margin: 2 4;
     text-align: center;
 }
-"""
+""" % {
+    "app_bg": theme.APP_BG,
+    "text_faint": theme.TEXT_FAINT,
+}
 
 
 class TrayApp(App):

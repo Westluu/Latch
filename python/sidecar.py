@@ -14,6 +14,7 @@ import signal
 import sys
 from typing import Optional
 
+from latch import theme
 from latch.git_state import STATUS_COLORS, get_changed_files, get_diff, render_diff
 from latch.ipc import build_socket_path, cleanup_socket, start_ipc_server
 from latch.session_store import get_session_plan_path, read_plan
@@ -29,7 +30,7 @@ from textual.widgets import Footer, Header, ListItem, ListView, Markdown, Static
 class FileListItem(ListItem):
     def __init__(self, file_path: str, status: str, label: str, max_width: int = 20) -> None:
         self.file_path = file_path
-        color = STATUS_COLORS.get(status, "#6B7280")
+        color = STATUS_COLORS.get(status, theme.TEXT_SUBTLE)
         name = os.path.basename(file_path)
         display = name if len(name) <= 10 else name[:6] + "…"
         markup = f"[bold {color}]{label}[/]  {display}"
@@ -41,7 +42,7 @@ class PlanListItem(ListItem):
         self.plan_path = plan_path
         slug = os.path.basename(plan_path).replace(".md", "")
         display = slug if len(slug) <= 24 else slug[:21] + "…"
-        markup = f"[#A78BFA]▸[/] {display}"
+        markup = f"[{theme.ACCENT_SOFT}]▸[/] {display}"
         super().__init__(Static(markup))
 
 
@@ -49,36 +50,36 @@ class PlanListItem(ListItem):
 
 CSS = """
 Screen {
-    background: #111827;
+    background: %(app_bg)s;
 }
 
 #tab-bar {
     height: 1;
-    background: #1F2937;
+    background: %(surface_bg)s;
 }
 
 #tab-files {
-    width: 50%;
+    width: 50%%;
     content-align: center middle;
-    background: #1F2937;
-    color: #6B7280;
+    background: %(surface_bg)s;
+    color: %(text_subtle)s;
 }
 
 #tab-files.active {
-    background: #7C3AED;
-    color: #F9FAFB;
+    background: %(accent)s;
+    color: %(text_bright)s;
 }
 
 #tab-plans {
-    width: 50%;
+    width: 50%%;
     content-align: center middle;
-    background: #1F2937;
-    color: #6B7280;
+    background: %(surface_bg)s;
+    color: %(text_subtle)s;
 }
 
 #tab-plans.active {
-    background: #7C3AED;
-    color: #F9FAFB;
+    background: %(accent)s;
+    color: %(text_bright)s;
 }
 
 #files-panel {
@@ -90,44 +91,44 @@ Screen {
 }
 
 #file-list {
-    width: 28%;
-    border: round #4B5563;
+    width: 28%%;
+    border: round %(border)s;
     padding: 0 1;
 }
 
 #file-list:focus-within {
-    border: round #7C3AED;
+    border: round %(border_focus)s;
 }
 
 #diff-view {
-    width: 72%;
-    border: round #4B5563;
+    width: 72%%;
+    border: round %(border)s;
     overflow-y: scroll;
 }
 
 #diff-view:focus-within {
-    border: round #7C3AED;
+    border: round %(border_focus)s;
 }
 
 #plan-list {
-    width: 28%;
-    border: round #4B5563;
+    width: 28%%;
+    border: round %(border)s;
     padding: 0 1;
 }
 
 #plan-list:focus-within {
-    border: round #7C3AED;
+    border: round %(border_focus)s;
 }
 
 #plan-view {
-    width: 72%;
-    border: round #4B5563;
+    width: 72%%;
+    border: round %(border)s;
     overflow-y: scroll;
     padding: 0 1;
 }
 
 #plan-view:focus-within {
-    border: round #7C3AED;
+    border: round %(border_focus)s;
 }
 
 #plan-view Markdown {
@@ -135,7 +136,7 @@ Screen {
 }
 
 #plan-empty {
-    color: #4B5563;
+    color: %(text_faint)s;
     padding: 1 2;
 }
 
@@ -145,9 +146,19 @@ ListView > ListItem {
 }
 
 ListView > ListItem.--highlight {
-    background: #374151;
+    background: %(selection_bg)s;
 }
-"""
+""" % {
+    "accent": theme.ACCENT,
+    "app_bg": theme.APP_BG,
+    "border": theme.BORDER,
+    "border_focus": theme.BORDER_FOCUS,
+    "selection_bg": theme.SELECTION_BG,
+    "surface_bg": theme.SURFACE_BG,
+    "text_bright": theme.TEXT_BRIGHT,
+    "text_faint": theme.TEXT_FAINT,
+    "text_subtle": theme.TEXT_SUBTLE,
+}
 
 
 class SidecarApp(App):

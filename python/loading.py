@@ -5,6 +5,8 @@ import os
 import sys
 import time
 
+from latch import theme
+
 LATCH_ASCII = [
     " ██╗      █████╗ ████████╗  ██████╗██╗  ██╗",
     " ██║     ██╔══██╗╚══██╔══╝ ██╔════╝██║  ██║",
@@ -16,8 +18,8 @@ LATCH_ASCII = [
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
-PURPLE   = "\033[38;2;124;58;237m"
-DIM      = "\033[38;2;75;85;99m"
+PURPLE   = theme.ansi_fg(theme.ACCENT)
+DIM      = theme.ansi_fg(theme.TEXT_FAINT)
 RESET    = "\033[0m"
 HIDE_CUR = "\033[?25l"
 SHOW_CUR = "\033[?25h"

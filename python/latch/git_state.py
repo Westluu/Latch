@@ -4,6 +4,7 @@ import os
 import subprocess
 from typing import TypedDict
 
+from latch import theme
 from rich.text import Text
 
 
@@ -24,10 +25,10 @@ STATUS_LABEL: dict[str, str] = {
 }
 
 STATUS_COLORS: dict[str, str] = {
-    "modified": "#F59E0B",
-    "added": "#10B981",
-    "deleted": "#EF4444",
-    "untracked": "#6B7280",
+    "modified": theme.WARNING,
+    "added": theme.SUCCESS,
+    "deleted": theme.ERROR,
+    "untracked": theme.TEXT_SUBTLE,
 }
 
 STATUS_MAP: dict[str, str] = {
@@ -84,13 +85,13 @@ def render_diff(diff_text: str) -> Text:
     text = Text()
     for line in diff_text.splitlines():
         if line.startswith("+++") or line.startswith("---"):
-            text.append(line + "\n", style="#6B7280")
+            text.append(line + "\n", style=theme.TEXT_SUBTLE)
         elif line.startswith("+"):
-            text.append(line + "\n", style="#10B981 on #0D2818")
+            text.append(line + "\n", style=f"{theme.SUCCESS} on {theme.DIFF_ADD_BG}")
         elif line.startswith("-"):
-            text.append(line + "\n", style="#EF4444 on #2D1A1A")
+            text.append(line + "\n", style=f"{theme.ERROR} on {theme.DIFF_REMOVE_BG}")
         elif line.startswith("@@"):
-            text.append(line + "\n", style="bold #3B82F6")
+            text.append(line + "\n", style=f"bold {theme.INFO_STRONG}")
         else:
-            text.append(line + "\n", style="#6B7280")
+            text.append(line + "\n", style=theme.TEXT_SUBTLE)
     return text

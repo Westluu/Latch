@@ -989,7 +989,7 @@ test("cli workspaces opens to the left of the remembered Claude pane across cwd 
   });
 });
 
-test("cli toggle reopens the sidecar to the right of the current focused pane", () => {
+test("cli toggle reopens the sidecar to the right of the saved Claude pane", () => {
   withTempDir((dir) => {
     const binDir = join(dir, "bin");
     const tmpRoot = join(dir, "tmp");
@@ -1010,47 +1010,6 @@ test("cli toggle reopens the sidecar to the right of the current focused pane", 
     mkdirSync(latchTmp, { recursive: true });
     const targetHash = createHash("sha256").update(`tmux-window:@7:sidecar-target`).digest("hex").slice(0, 12);
     writeFileSync(join(latchTmp, `${targetHash}-sidecar-target-pane.txt`), "%claude");
-
-    const env = {
-      ...process.env,
-      TMUX: "1",
-      TMPDIR: tmpRoot,
-      PATH: `${binDir}:${process.env.PATH ?? ""}`,
-      LATCH_TMUX_LOG: tmuxLog,
-    };
-
-    const result = runCli(["toggle"], { env, cwd: focusedPaneCwd });
-    assert.equal(result.status, 0);
-
-    const logged = readFileSync(tmuxLog, "utf-8");
-    assert.match(logged, /display-message -p #\{pane_id\}/);
-    assert.match(logged, /split-window -h -l 40% -P -F #\{pane_id\} -t %other -c /);
-    assert.match(logged, /sidecar\.py/);
-  });
-});
-
-test("cli toggle falls back to the saved Claude pane when focused in a Latch pane", () => {
-  withTempDir((dir) => {
-    const binDir = join(dir, "bin");
-    const tmpRoot = join(dir, "tmp");
-    const focusedPaneCwd = projectFixturePath(dir, "other-pane");
-    mkdirSync(binDir, { recursive: true });
-    mkdirSync(tmpRoot, { recursive: true });
-
-    const tmuxLog = join(dir, "tmux.log");
-    const tmuxStub = join(binDir, "tmux");
-    writeFileSync(
-      tmuxStub,
-      "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$LATCH_TMUX_LOG\"\nif [ \"$1\" = \"display-message\" ] && [ \"$2\" = \"-p\" ] && [ \"$3\" = '#{pane_id}' ]; then printf '%s\\n' '%workspaces'; fi\nif [ \"$1\" = \"display-message\" ] && [ \"$2\" = \"-p\" ] && [ \"$3\" = '#{window_id}' ]; then printf '%s\\n' '@7'; fi\nif [ \"$1\" = \"display-message\" ] && [ \"$2\" = \"-p\" ] && [ \"$3\" = '#S' ]; then printf '%s\\n' 'latch-test'; fi\nif [ \"$1\" = \"display-message\" ] && [ \"$2\" = \"-t\" ] && [ \"$4\" = \"-p\" ] && [ \"$5\" = '#S' ]; then printf '%s\\n' 'latch-test'; fi\nif [ \"$1\" = \"split-window\" ]; then printf '%s\\n' '%sidecar'; fi\nexit 0\n"
-    );
-    chmodSync(tmuxStub, 0o755);
-
-    const latchTmp = join(tmpRoot, "latch");
-    mkdirSync(latchTmp, { recursive: true });
-    const targetHash = createHash("sha256").update(`tmux-window:@7:sidecar-target`).digest("hex").slice(0, 12);
-    writeFileSync(join(latchTmp, `${targetHash}-sidecar-target-pane.txt`), "%claude");
-    const workspacesHash = createHash("sha256").update(`tmux-window:@7:workspaces`).digest("hex").slice(0, 12);
-    writeFileSync(join(latchTmp, `${workspacesHash}-workspaces-pane.txt`), "%workspaces");
 
     const env = {
       ...process.env,
