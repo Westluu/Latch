@@ -11,102 +11,16 @@ import asyncio
 import atexit
 import os
 import signal
-import subprocess
 import sys
 from typing import Optional
 
+from latch.git_state import STATUS_COLORS, get_changed_files, get_diff, render_diff
 from latch.ipc import build_socket_path, cleanup_socket, start_ipc_server
 from latch.session_store import get_session_plan_path, read_plan
-from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Footer, Header, ListItem, ListView, Markdown, Static
-
-
-# ── Git helpers ───────────────────────────────────────────────────────────────
-
-STATUS_LABEL = {
-    "M": "M",
-    "A": "A",
-    "D": "D",
-    "?": "?",
-    "AM": "A",
-    "MM": "M",
-    "R": "M",
-}
-
-STATUS_COLORS = {
-    "modified": "#F59E0B",
-    "added": "#10B981",
-    "deleted": "#EF4444",
-    "untracked": "#6B7280",
-}
-
-STATUS_MAP = {
-    "M": "modified",
-    "A": "added",
-    "D": "deleted",
-    "?": "untracked",
-    "AM": "added",
-    "MM": "modified",
-    "R": "modified",
-}
-
-
-def get_changed_files(cwd: str) -> list[dict]:
-    result = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-    )
-    files = []
-    for line in result.stdout.splitlines():
-        if not line:
-            continue
-        xy = line[:2].strip()
-        path = line[3:]
-        if " -> " in path:
-            path = path.split(" -> ")[-1]
-        status = STATUS_MAP.get(xy, "modified")
-        label = STATUS_LABEL.get(xy, "M")
-        files.append({"path": path, "status": status, "label": label})
-    return files
-
-
-def get_diff(cwd: str, file_path: str) -> str:
-    for args in [
-        ["git", "diff", "--cached", "--", file_path],
-        ["git", "diff", "--", file_path],
-    ]:
-        r = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
-        if r.stdout.strip():
-            return r.stdout
-    full = os.path.join(cwd, file_path)
-    if os.path.exists(full):
-        try:
-            with open(full) as f:
-                return "\n".join(f"+ {l.rstrip()}" for l in f)
-        except Exception:
-            return "(binary or unreadable file)"
-    return "(no diff available)"
-
-
-def render_diff(diff_text: str) -> Text:
-    text = Text()
-    for line in diff_text.splitlines():
-        if line.startswith("+++") or line.startswith("---"):
-            text.append(line + "\n", style="#6B7280")
-        elif line.startswith("+"):
-            text.append(line + "\n", style="#10B981 on #0D2818")
-        elif line.startswith("-"):
-            text.append(line + "\n", style="#EF4444 on #2D1A1A")
-        elif line.startswith("@@"):
-            text.append(line + "\n", style="bold #3B82F6")
-        else:
-            text.append(line + "\n", style="#6B7280")
-    return text
 
 
 # ── Custom ListItem widgets ───────────────────────────────────────────────────

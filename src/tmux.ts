@@ -352,11 +352,7 @@ export function focusOrOpenSidecar(cwd: string, sessionId: string = ""): void {
     }
   }
 
-  const savedTargetPane = getSidecarTargetPaneId(cwd, sessionId);
-  const targetPane =
-    savedTargetPane && isPaneInCurrentSession(savedTargetPane)
-      ? savedTargetPane
-      : currentPane;
+  const targetPane = resolveSidecarToggleTargetPane(cwd, sessionId, currentPane);
 
   if (targetPane) {
     saveSidecarTargetPaneId(cwd, sessionId, targetPane);
@@ -369,6 +365,27 @@ export function focusOrOpenSidecar(cwd: string, sessionId: string = ""): void {
   );
   run(`tmux select-pane -t ${newPaneId}`);
   saveSidecarPaneId(cwd, sessionId, newPaneId);
+}
+
+function resolveSidecarToggleTargetPane(cwd: string, sessionId: string, currentPane: string): string {
+  if (currentPane && !isLatchPane(cwd, sessionId, currentPane)) {
+    return currentPane;
+  }
+
+  const savedTargetPane = getSidecarTargetPaneId(cwd, sessionId);
+  if (savedTargetPane && isPaneInCurrentSession(savedTargetPane)) {
+    return savedTargetPane;
+  }
+
+  return currentPane;
+}
+
+function isLatchPane(cwd: string, sessionId: string, paneId: string): boolean {
+  return [
+    getSidecarPaneId(cwd, sessionId),
+    getTrayPaneId(cwd, sessionId),
+    getWorkspacesPaneId(cwd),
+  ].includes(paneId);
 }
 
 // ── chat popup ──────────────────────────────────────────────────────────────
