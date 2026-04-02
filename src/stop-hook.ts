@@ -3,53 +3,31 @@
 // Fires when Claude's turn ends. Parses the latest turn from the session
 // transcript, then sends it to the tray via IPC.
 
-import { existsSync, appendFileSync, unlinkSync } from "node:fs";
-import { connect } from "node:net";
+import { existsSync, unlinkSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 import { getTraySocketPath, sendTrayMessage } from "./ipc.js";
 import { getSidecarPaneId, saveTrayPaneId, isPaneInCurrentSession } from "./tmux.js";
 import { sessionIdFromTranscript, parseLastTurn } from "./transcript.js";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
+import { createFileLogger, readJsonFromStdin, sleep } from "./hook-runtime.js";
+import { pythonUiCommand } from "./python-ui.js";
+import { isSocketAlive } from "./sidecar-runtime.js";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 const LOG = "/tmp/latch-debug.log";
-const dbg = (...args: unknown[]) => {
-  try { appendFileSync(LOG, `[${new Date().toISOString()}] ${args.join(" ")}\n`); } catch {}
-};
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-function isSocketAlive(socketPath: string): Promise<boolean> {
-  return new Promise((res) => {
-    const socket = connect(socketPath);
-    const timer = setTimeout(() => { socket.destroy(); res(false); }, 1000);
-    socket.on("connect", () => { clearTimeout(timer); socket.destroy(); res(true); });
-    socket.on("error", () => { clearTimeout(timer); res(false); });
-  });
-}
+const dbg = createFileLogger(LOG);
 
 function trayCommand(cwd: string, sessionId: string): string {
-  const trayPy = resolve(__dirname, "..", "python", "tray.py");
-  return `python3 "${trayPy}" "${cwd}" "${sessionId}"`;
+  return pythonUiCommand("tray.py", cwd, sessionId);
 }
 
 // ── main ─────────────────────────────────────────────────────────────────────
 
-let input = "";
-const timeout = setTimeout(() => process.exit(0), 10000);
-
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => (input += chunk));
-process.stdin.on("end", async () => {
-  clearTimeout(timeout);
+void (async () => {
+  const data = await readJsonFromStdin(10000);
   try {
-    const data = JSON.parse(input) as Record<string, unknown>;
-    const cwd = (data.cwd as string) || process.cwd();
-    const transcriptPath = data.transcript_path as string | undefined;
+    const cwd = (data?.cwd as string) || process.cwd();
+    const transcriptPath = data?.transcript_path as string | undefined;
     dbg("fired cwd=" + cwd + " transcript=" + transcriptPath);
 
     if (!transcriptPath || !existsSync(transcriptPath)) {
@@ -105,4 +83,4 @@ process.stdin.on("end", async () => {
     dbg("CAUGHT ERROR:", e);
   }
   process.exit(0);
-});
+})();

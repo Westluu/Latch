@@ -2,199 +2,31 @@
 Latch sidecar TUI — file list + diff viewer + plans viewer.
 
 Usage:
-    python3 sidecar.py <cwd> [session_id]
+    python3 ui/sidecar.py <cwd> [session_id]
 """
 
 from __future__ import annotations
 
 import asyncio
-import atexit
-import glob
-import hashlib
-import json
 import os
-import signal
-import subprocess
 import sys
-import tempfile
 from typing import Optional
 
-from claude_paths import find_transcript_path
-from rich.text import Text
+try:
+    from ._runtime import arg_value, bootstrap_python_root, register_socket_cleanup, require_directory_arg
+except ImportError:
+    from _runtime import arg_value, bootstrap_python_root, register_socket_cleanup, require_directory_arg
+
+bootstrap_python_root()
+
+from latch import theme
+from latch.git_state import STATUS_COLORS, get_changed_files, get_diff, render_diff
+from latch.ipc import build_socket_path, cleanup_socket, start_ipc_server
+from latch.session_store import get_session_plan_path, read_plan
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import Footer, Header, ListItem, ListView, Markdown, Static
-
-# ── IPC helpers ──────────────────────────────────────────────────────────────
-
-
-def get_socket_dir() -> str:
-    base = os.environ.get("XDG_RUNTIME_DIR", tempfile.gettempdir())
-    d = os.path.join(base, "latch")
-    os.makedirs(d, exist_ok=True)
-    return d
-
-
-def get_socket_path(cwd: str, session_id: str = "") -> str:
-    h = hashlib.sha256((cwd + session_id).encode()).hexdigest()[:12]
-    return os.path.join(get_socket_dir(), f"{h}-sidecar.sock")
-
-
-async def start_ipc_server(socket_path: str, on_message):
-    if os.path.exists(socket_path):
-        os.unlink(socket_path)
-
-    async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        buffer = ""
-        while True:
-            data = await reader.read(4096)
-            if not data:
-                break
-            buffer += data.decode()
-            while "\n" in buffer:
-                line, buffer = buffer.split("\n", 1)
-                line = line.strip()
-                if line:
-                    try:
-                        msg = json.loads(line)
-                        await on_message(msg)
-                        writer.write(b"ok\n")
-                        await writer.drain()
-                    except json.JSONDecodeError:
-                        writer.write(b"error: invalid json\n")
-                        await writer.drain()
-        writer.close()
-
-    server = await asyncio.start_unix_server(handle_client, path=socket_path)
-    return server
-
-
-# ── Git helpers ───────────────────────────────────────────────────────────────
-
-STATUS_LABEL = {
-    "M": "M",
-    "A": "A",
-    "D": "D",
-    "?": "?",
-    "AM": "A",
-    "MM": "M",
-    "R": "M",
-}
-
-STATUS_COLORS = {
-    "modified": "#F59E0B",
-    "added": "#10B981",
-    "deleted": "#EF4444",
-    "untracked": "#6B7280",
-}
-
-STATUS_MAP = {
-    "M": "modified",
-    "A": "added",
-    "D": "deleted",
-    "?": "untracked",
-    "AM": "added",
-    "MM": "modified",
-    "R": "modified",
-}
-
-
-def get_changed_files(cwd: str) -> list[dict]:
-    result = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=cwd,
-        capture_output=True,
-        text=True,
-    )
-    files = []
-    for line in result.stdout.splitlines():
-        if not line:
-            continue
-        xy = line[:2].strip()
-        path = line[3:]
-        if " -> " in path:
-            path = path.split(" -> ")[-1]
-        status = STATUS_MAP.get(xy, "modified")
-        label = STATUS_LABEL.get(xy, "M")
-        files.append({"path": path, "status": status, "label": label})
-    return files
-
-
-def get_diff(cwd: str, file_path: str) -> str:
-    for args in [
-        ["git", "diff", "--cached", "--", file_path],
-        ["git", "diff", "--", file_path],
-    ]:
-        r = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
-        if r.stdout.strip():
-            return r.stdout
-    full = os.path.join(cwd, file_path)
-    if os.path.exists(full):
-        try:
-            with open(full) as f:
-                return "\n".join(f"+ {l.rstrip()}" for l in f)
-        except Exception:
-            return "(binary or unreadable file)"
-    return "(no diff available)"
-
-
-def render_diff(diff_text: str) -> Text:
-    text = Text()
-    for line in diff_text.splitlines():
-        if line.startswith("+++") or line.startswith("---"):
-            text.append(line + "\n", style="#6B7280")
-        elif line.startswith("+"):
-            text.append(line + "\n", style="#10B981 on #0D2818")
-        elif line.startswith("-"):
-            text.append(line + "\n", style="#EF4444 on #2D1A1A")
-        elif line.startswith("@@"):
-            text.append(line + "\n", style="bold #3B82F6")
-        else:
-            text.append(line + "\n", style="#6B7280")
-    return text
-
-
-# ── Plans helpers ─────────────────────────────────────────────────────────────
-
-PLANS_DIR = os.path.join(os.path.expanduser("~"), ".claude", "plans")
-
-
-def get_session_plan_path(cwd: str, session_id: str) -> Optional[str]:
-    """
-    Derive the plan file for this specific session by reading the slug from
-    the session transcript. Returns the plan path if the file exists, else None.
-    """
-    if not session_id:
-        return None
-    transcript = find_transcript_path(cwd, session_id)
-    if not transcript:
-        return None
-    try:
-        with open(transcript) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                    slug = obj.get("slug")
-                    if slug:
-                        plan_path = os.path.join(PLANS_DIR, f"{slug}.md")
-                        return plan_path  # return even if file doesn't exist yet
-                except Exception:
-                    pass
-    except Exception:
-        pass
-    return None
-
-
-def read_plan(plan_path: str) -> str:
-    try:
-        with open(plan_path) as f:
-            return f.read()
-    except Exception:
-        return "*Could not read plan file.*"
 
 
 # ── Custom ListItem widgets ───────────────────────────────────────────────────
@@ -203,7 +35,7 @@ def read_plan(plan_path: str) -> str:
 class FileListItem(ListItem):
     def __init__(self, file_path: str, status: str, label: str, max_width: int = 20) -> None:
         self.file_path = file_path
-        color = STATUS_COLORS.get(status, "#6B7280")
+        color = STATUS_COLORS.get(status, theme.TEXT_SUBTLE)
         name = os.path.basename(file_path)
         display = name if len(name) <= 10 else name[:6] + "…"
         markup = f"[bold {color}]{label}[/]  {display}"
@@ -215,7 +47,7 @@ class PlanListItem(ListItem):
         self.plan_path = plan_path
         slug = os.path.basename(plan_path).replace(".md", "")
         display = slug if len(slug) <= 24 else slug[:21] + "…"
-        markup = f"[#A78BFA]▸[/] {display}"
+        markup = f"[{theme.ACCENT_SOFT}]▸[/] {display}"
         super().__init__(Static(markup))
 
 
@@ -223,36 +55,36 @@ class PlanListItem(ListItem):
 
 CSS = """
 Screen {
-    background: #111827;
+    background: %(app_bg)s;
 }
 
 #tab-bar {
     height: 1;
-    background: #1F2937;
+    background: %(surface_bg)s;
 }
 
 #tab-files {
-    width: 50%;
+    width: 50%%;
     content-align: center middle;
-    background: #1F2937;
-    color: #6B7280;
+    background: %(surface_bg)s;
+    color: %(text_subtle)s;
 }
 
 #tab-files.active {
-    background: #7C3AED;
-    color: #F9FAFB;
+    background: %(accent)s;
+    color: %(text_bright)s;
 }
 
 #tab-plans {
-    width: 50%;
+    width: 50%%;
     content-align: center middle;
-    background: #1F2937;
-    color: #6B7280;
+    background: %(surface_bg)s;
+    color: %(text_subtle)s;
 }
 
 #tab-plans.active {
-    background: #7C3AED;
-    color: #F9FAFB;
+    background: %(accent)s;
+    color: %(text_bright)s;
 }
 
 #files-panel {
@@ -264,44 +96,44 @@ Screen {
 }
 
 #file-list {
-    width: 28%;
-    border: round #4B5563;
+    width: 28%%;
+    border: round %(border)s;
     padding: 0 1;
 }
 
 #file-list:focus-within {
-    border: round #7C3AED;
+    border: round %(border_focus)s;
 }
 
 #diff-view {
-    width: 72%;
-    border: round #4B5563;
+    width: 72%%;
+    border: round %(border)s;
     overflow-y: scroll;
 }
 
 #diff-view:focus-within {
-    border: round #7C3AED;
+    border: round %(border_focus)s;
 }
 
 #plan-list {
-    width: 28%;
-    border: round #4B5563;
+    width: 28%%;
+    border: round %(border)s;
     padding: 0 1;
 }
 
 #plan-list:focus-within {
-    border: round #7C3AED;
+    border: round %(border_focus)s;
 }
 
 #plan-view {
-    width: 72%;
-    border: round #4B5563;
+    width: 72%%;
+    border: round %(border)s;
     overflow-y: scroll;
     padding: 0 1;
 }
 
 #plan-view:focus-within {
-    border: round #7C3AED;
+    border: round %(border_focus)s;
 }
 
 #plan-view Markdown {
@@ -309,7 +141,7 @@ Screen {
 }
 
 #plan-empty {
-    color: #4B5563;
+    color: %(text_faint)s;
     padding: 1 2;
 }
 
@@ -319,9 +151,19 @@ ListView > ListItem {
 }
 
 ListView > ListItem.--highlight {
-    background: #374151;
+    background: %(selection_bg)s;
 }
-"""
+""" % {
+    "accent": theme.ACCENT,
+    "app_bg": theme.APP_BG,
+    "border": theme.BORDER,
+    "border_focus": theme.BORDER_FOCUS,
+    "selection_bg": theme.SELECTION_BG,
+    "surface_bg": theme.SURFACE_BG,
+    "text_bright": theme.TEXT_BRIGHT,
+    "text_faint": theme.TEXT_FAINT,
+    "text_subtle": theme.TEXT_SUBTLE,
+}
 
 
 class SidecarApp(App):
@@ -348,7 +190,7 @@ class SidecarApp(App):
         # Derive session plan path upfront (may not exist yet)
         self._session_plan_path: Optional[str] = get_session_plan_path(cwd, session_id)
         self._ipc_server = None
-        self._socket_path = get_socket_path(cwd, session_id)
+        self._socket_path = build_socket_path(cwd, "sidecar", session_id)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -395,7 +237,9 @@ class SidecarApp(App):
             self._ipc_server = await start_ipc_server(self._socket_path, on_message)
             async with self._ipc_server:
                 await self._ipc_server.serve_forever()
-        except Exception:
+        except asyncio.CancelledError:
+            raise
+        except OSError:
             pass
 
     async def refresh_files(self) -> None:
@@ -521,28 +365,11 @@ class SidecarApp(App):
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python3 sidecar.py <cwd> [session_id]", file=sys.stderr)
-        sys.exit(1)
+    cwd = require_directory_arg(sys.argv, 1, "Usage: python3 ui/sidecar.py <cwd> [session_id]")
+    session_id = arg_value(sys.argv, 2)
 
-    cwd = os.path.abspath(sys.argv[1])
-    session_id = sys.argv[2] if len(sys.argv) > 2 else ""
-    if not os.path.isdir(cwd):
-        print(f"Error: {cwd!r} is not a directory", file=sys.stderr)
-        sys.exit(1)
-
-    socket_path = get_socket_path(cwd, session_id)
-
-    def cleanup_socket():
-        try:
-            if os.path.exists(socket_path):
-                os.unlink(socket_path)
-        except OSError:
-            pass
-
-    atexit.register(cleanup_socket)
-    signal.signal(signal.SIGHUP, lambda *_: (cleanup_socket(), sys.exit(0)))
-    signal.signal(signal.SIGTERM, lambda *_: (cleanup_socket(), sys.exit(0)))
+    socket_path = build_socket_path(cwd, "sidecar", session_id)
+    register_socket_cleanup(socket_path, cleanup_socket)
 
     app = SidecarApp(cwd, session_id)
     app.run()

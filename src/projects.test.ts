@@ -607,7 +607,7 @@ test("python projects app registers ctrl+t for open in tab", () => {
       [
         "import sys",
         "sys.path.insert(0, 'python')",
-        "import projects",
+        "import ui.projects as projects",
         "binding = next(binding for binding in projects.ProjectsApp.BINDINGS if binding.action == 'open_selected_in_tab')",
         "print(binding.key)",
         "print(binding.priority)",
@@ -625,6 +625,30 @@ test("python projects app registers ctrl+t for open in tab", () => {
   assert.equal(lines[1], "True");
 });
 
+test("python projects app resolves cli path from the repo dist directory", () => {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import os",
+        "import sys",
+        "sys.path.insert(0, 'python')",
+        "import ui.projects as projects",
+        "app = projects.ProjectsApp('/tmp')",
+        "print(os.path.relpath(app._cli_path(), os.getcwd()))",
+      ].join("\n"),
+    ],
+    {
+      cwd: realpathSync(process.cwd()),
+      encoding: "utf-8",
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), "dist/cli.js");
+});
+
 test("python projects app open-in-tab action invokes project open --tab", () => {
   const result = spawnSync(
     "python3",
@@ -635,7 +659,7 @@ test("python projects app open-in-tab action invokes project open --tab", () => 
         "import sys",
         "from types import MethodType, SimpleNamespace",
         "sys.path.insert(0, 'python')",
-        "import projects",
+        "import ui.projects as projects",
         "app = projects.ProjectsApp('/tmp')",
         "calls = {}",
         "def run_cli(self, args):",
@@ -673,7 +697,7 @@ test("python projects app open action invokes project open --current-session", (
         "import sys",
         "from types import MethodType, SimpleNamespace",
         "sys.path.insert(0, 'python')",
-        "import projects",
+        "import ui.projects as projects",
         "app = projects.ProjectsApp('/tmp')",
         "calls = {}",
         "def run_cli(self, args):",
@@ -749,7 +773,7 @@ test("python load_projects reads v2 projects with multiple workspaces", () => {
           "import sys",
           `os.environ['XDG_CONFIG_HOME'] = ${JSON.stringify(dir)}`,
           "sys.path.insert(0, 'python')",
-          "import projects",
+          "import ui.projects as projects",
           "items = projects.load_projects()",
           "print(json.dumps({'count': len(items), 'alias': items[0].alias, 'workspaces': len(items[0].workspaces), 'default': items[0].default_workspace}, sort_keys=True))",
         ].join("\n"),
@@ -768,6 +792,75 @@ test("python load_projects reads v2 projects with multiple workspaces", () => {
   });
 });
 
+test("python load_projects skips malformed project entries instead of failing the whole list", () => {
+  withTempDir((dir) => {
+    const configPath = configPathFor(dir);
+    const validRootPath = projectFixturePath(dir, "frontend");
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 2,
+        projects: {
+          frontend: {
+            rootPath: validRootPath,
+            createdAt: "2026-03-31T18:00:00.000Z",
+            updatedAt: "2026-03-31T18:00:00.000Z",
+            lastOpenedAt: null,
+            defaultWorkspace: "root",
+            workspaces: {
+              root: {
+                path: validRootPath,
+                kind: "root",
+                createdAt: "2026-03-31T18:00:00.000Z",
+                updatedAt: "2026-03-31T18:00:00.000Z",
+              },
+            },
+          },
+          broken: {
+            rootPath: projectFixturePath(dir, "broken"),
+            createdAt: "2026-03-31T18:00:00.000Z",
+            defaultWorkspace: "root",
+            workspaces: {
+              root: {
+                path: projectFixturePath(dir, "broken"),
+                kind: "root",
+              },
+            },
+          },
+        },
+      }, null, 2) + "\n"
+    );
+
+    const result = spawnSync(
+      "python3",
+      [
+        "-c",
+        [
+          "import json",
+          "import os",
+          "import sys",
+          `os.environ['XDG_CONFIG_HOME'] = ${JSON.stringify(dir)}`,
+          "sys.path.insert(0, 'python')",
+          "import ui.projects as projects",
+          "items = projects.load_projects()",
+          "print(json.dumps({'count': len(items), 'aliases': [item.alias for item in items]}, sort_keys=True))",
+        ].join("\n"),
+      ],
+      {
+        cwd: realpathSync(process.cwd()),
+        encoding: "utf-8",
+      }
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout.trim()), {
+      aliases: ["frontend"],
+      count: 1,
+    });
+  });
+});
+
 test("python projects app open action invokes workspace open when viewing workspaces", () => {
   const result = spawnSync(
     "python3",
@@ -778,7 +871,7 @@ test("python projects app open action invokes workspace open when viewing worksp
         "import sys",
         "from types import MethodType, SimpleNamespace",
         "sys.path.insert(0, 'python')",
-        "import projects",
+        "import ui.projects as projects",
         "app = projects.ProjectsApp('/tmp')",
         "calls = {}",
         "def run_cli(self, args):",
@@ -913,6 +1006,133 @@ test("cli chat finds Claude sessions in sanitized project directories", () => {
     const logged = readFileSync(tmuxLog, "utf-8");
     assert.match(logged, /display-popup/);
     assert.match(logged, /latest/);
+  });
+});
+
+test("cli chat ignores newer transcripts from a different cwd in a colliding Claude directory", () => {
+  withTempDir((dir) => {
+    const binDir = join(dir, "bin");
+    const claudeProjectsDir = join(dir, ".claude", "projects");
+    const workspaceDir = join(dir, "workspace");
+    const targetPath = projectFixturePath(workspaceDir, "a-b");
+    const otherPath = projectFixturePath(workspaceDir, "a/b");
+    mkdirSync(binDir, { recursive: true });
+
+    const tmuxLog = join(dir, "tmux.log");
+    const tmuxStub = join(binDir, "tmux");
+    const pythonStub = join(binDir, "python3");
+    writeFileSync(
+      tmuxStub,
+      "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$LATCH_TMUX_LOG\"\nif [ \"$1\" = \"display-message\" ] && [ \"$2\" = \"-p\" ] && [ \"$3\" = '#{pane_id}' ]; then printf '%s\\n' '%claude'; fi\nif [ \"$1\" = \"display-popup\" ]; then exit 0; fi\nexit 0\n"
+    );
+    chmodSync(tmuxStub, 0o755);
+    writeFileSync(pythonStub, "#!/bin/sh\nexit 0\n");
+    chmodSync(pythonStub, 0o755);
+
+    const collidingDir = join(claudeProjectsDir, claudeProjectDirName(realpathSync(targetPath)));
+    mkdirSync(collidingDir, { recursive: true });
+    writeFileSync(
+      join(collidingDir, "wrong.jsonl"),
+      JSON.stringify({ cwd: realpathSync(otherPath) }) + "\n"
+    );
+    writeFileSync(
+      join(collidingDir, "right.jsonl"),
+      JSON.stringify({ cwd: realpathSync(targetPath) }) + "\n"
+    );
+
+    const wrongTime = new Date("2026-04-01T19:00:00.000Z");
+    const rightTime = new Date("2026-04-01T18:00:00.000Z");
+    utimesSync(join(collidingDir, "wrong.jsonl"), wrongTime, wrongTime);
+    utimesSync(join(collidingDir, "right.jsonl"), rightTime, rightTime);
+
+    const env = {
+      ...process.env,
+      HOME: dir,
+      TMUX: "1",
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      LATCH_TMUX_LOG: tmuxLog,
+    };
+
+    const result = runCli(["chat"], { env, cwd: targetPath });
+    assert.equal(result.status, 0, result.stderr);
+
+    const logged = readFileSync(tmuxLog, "utf-8");
+    assert.match(logged, /display-popup/);
+    assert.match(logged, /right/);
+    assert.doesNotMatch(logged, /wrong/);
+  });
+});
+
+test("python get_diff includes both staged and unstaged changes for a partially staged file", () => {
+  withTempDir((dir) => {
+    const repoPath = join(dir, "repo");
+    initGitRepo(repoPath);
+
+    const filePath = join(repoPath, "notes.txt");
+    writeFileSync(filePath, "alpha\nbeta\n");
+    runGit(["add", "notes.txt"], repoPath);
+    runGit(["commit", "-m", "add notes"], repoPath);
+
+    writeFileSync(filePath, "ALPHA\nbeta\n");
+    runGit(["add", "notes.txt"], repoPath);
+    writeFileSync(filePath, "ALPHA\nBETA\n");
+
+    const result = spawnSync(
+      "python3",
+      [
+        "-c",
+        [
+          "import sys",
+          "sys.path.insert(0, 'python')",
+          "from latch.git_state import get_diff",
+          `print(get_diff(${JSON.stringify(repoPath)}, 'notes.txt'))`,
+        ].join("\n"),
+      ],
+      {
+        cwd: realpathSync(process.cwd()),
+        encoding: "utf-8",
+      }
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /-alpha/);
+    assert.match(result.stdout, /\+ALPHA/);
+    assert.match(result.stdout, /-beta/);
+    assert.match(result.stdout, /\+BETA/);
+  });
+});
+
+test("python tray revert_from leaves turns unreverted when restore fails", () => {
+  withTempDir((dir) => {
+    const targetPath = join(dir, "restored", "note.txt");
+    const missingBackupPath = join(dir, "missing-backup.txt");
+
+    const result = spawnSync(
+      "python3",
+      [
+        "-c",
+        [
+          "import json",
+          "import sys",
+          "from datetime import datetime",
+          "sys.path.insert(0, 'python')",
+          "import ui.tray as tray",
+          `turn = tray.TurnData('turn-1', 'Broken restore', [{'path': ${JSON.stringify(targetPath)}, 'backupFile': ${JSON.stringify(missingBackupPath)}, 'isNew': False}], {'added': 1, 'removed': 0}, datetime.utcnow())`,
+          "turns, errors = tray.revert_from([turn], 0)",
+          "print(json.dumps({'reverted': turns[0].reverted, 'errors': errors}))",
+        ].join("\n"),
+      ],
+      {
+        cwd: realpathSync(process.cwd()),
+        encoding: "utf-8",
+      }
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout.trim()), {
+      reverted: false,
+      errors: ['Broken restore: missing backup for "note.txt"'],
+    });
   });
 });
 

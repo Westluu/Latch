@@ -4,8 +4,7 @@ import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSessi
 import { sendSidecarMessage } from "./ipc.js";
 import { initHook, removeHook } from "./init.js";
 import { addCurrentProject, addProject, createWorktreeWorkspace, getProject, getProjectPath, getWorkspace, listProjects, listWorkspaces, markProjectOpened, markWorkspaceOpened, removeProject, removeWorkspace } from "./projects.js";
-import { claudeProjectPaths } from "./claude.js";
-import { readdirSync, statSync } from "node:fs";
+import { findLatestSessionId } from "./session-lookup.js";
 import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
@@ -385,28 +384,7 @@ if (command === "chat") {
     console.error("latch chat: must be run inside a tmux session.");
     process.exit(1);
   }
-  let sessionId = "";
-  const transcripts = new Map<string, { name: string; mtime: number }>();
-  for (const projectPath of claudeProjectPaths(cwd)) {
-    try {
-      const files = readdirSync(projectPath)
-        .filter((f: string) => f.endsWith(".jsonl"))
-        .map((f: string) => ({ name: f, mtime: statSync(`${projectPath}/${f}`).mtimeMs }));
-
-      for (const file of files) {
-        const existing = transcripts.get(file.name);
-        if (!existing || file.mtime > existing.mtime) {
-          transcripts.set(file.name, file);
-        }
-      }
-    } catch {}
-  }
-  const [latest] = [...transcripts.values()].sort(
-    (a: { mtime: number }, b: { mtime: number }) => b.mtime - a.mtime
-  );
-  if (latest) {
-    sessionId = latest.name.replace(/\.jsonl$/, "");
-  }
+  const sessionId = findLatestSessionId(cwd);
   try {
     openChatPopup(cwd, sessionId);
   } catch (e: unknown) {

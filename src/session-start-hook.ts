@@ -8,23 +8,14 @@ import { execSync } from "node:child_process";
 import { splitAndLaunchSidecar, saveSidecarPaneId, saveTrayPaneId, getSidecarPaneId, isPaneInCurrentSession } from "./tmux.js";
 import { getTraySocketPath, sendTrayMessage } from "./ipc.js";
 import { sessionIdFromTranscript, hasEdits, parseAllTurns } from "./transcript.js";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readJsonFromStdin, sleep } from "./hook-runtime.js";
+import { pythonUiCommand } from "./python-ui.js";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-let input = "";
-const timeout = setTimeout(() => process.exit(0), 10000);
-
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => (input += chunk));
-process.stdin.on("end", async () => {
-  clearTimeout(timeout);
+void (async () => {
+  const data = await readJsonFromStdin(10000);
   try {
-    const data = JSON.parse(input);
-    const cwd = data.cwd || process.cwd();
-    const transcriptPath = data.transcript_path as string | undefined;
+    const cwd = (data?.cwd as string) || process.cwd();
+    const transcriptPath = data?.transcript_path as string | undefined;
 
     if (!process.env.TMUX || !transcriptPath || !existsSync(transcriptPath)) {
       process.exit(0);
@@ -49,8 +40,7 @@ process.stdin.on("end", async () => {
     // Launch tray below sidecar
     const sidecarPane = getSidecarPaneId(cwd, sessionId);
     const targetFlag = sidecarPane ? `-b -t ${sidecarPane}` : "";
-    const trayPy = resolve(__dirname, "..", "python", "tray.py");
-    const trayCmd = `tmux split-window -v -l 10 -P -F '#{pane_id}' ${targetFlag} -c ${JSON.stringify(cwd)} 'python3 "${trayPy}" "${cwd}" "${sessionId}"'`;
+    const trayCmd = `tmux split-window -v -l 10 -P -F '#{pane_id}' ${targetFlag} -c ${JSON.stringify(cwd)} '${pythonUiCommand("tray.py", cwd, sessionId)}'`;
     const trayPaneId = execSync(trayCmd, { encoding: "utf-8" }).trim();
     saveTrayPaneId(cwd, sessionId, trayPaneId);
 
@@ -76,4 +66,4 @@ process.stdin.on("end", async () => {
 
   } catch {}
   process.exit(0);
-});
+})();

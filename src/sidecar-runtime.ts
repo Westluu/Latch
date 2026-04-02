@@ -2,12 +2,11 @@ import { existsSync, unlinkSync } from "node:fs";
 import { connect } from "node:net";
 import { getSidecarSocketPath } from "./ipc.js";
 import { splitAndLaunchSidecar, saveSidecarPaneId } from "./tmux.js";
+import { sleep } from "./hook-runtime.js";
 
 type DebugLogger = (...args: unknown[]) => void;
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function isSocketAlive(socketPath: string): Promise<boolean> {
+export async function isSocketAlive(socketPath: string): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = connect(socketPath);
     const timer = setTimeout(() => {

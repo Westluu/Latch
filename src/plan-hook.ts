@@ -3,33 +3,24 @@
 // Fires when Claude exits plan mode. Ensures the sidecar is open and sends
 // the plan file path so it switches to the Plans tab.
 
-import { existsSync, appendFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { sendSidecarMessage } from "./ipc.js";
 import { ensureSidecarReady } from "./sidecar-runtime.js";
 import { sessionIdFromTranscript, planFileFromTranscript } from "./transcript.js";
+import { createFileLogger, readJsonFromStdin, sleep } from "./hook-runtime.js";
 
 const LOG = "/tmp/latch-plan-hook.log";
-const dbg = (...args: unknown[]) => {
-  try { appendFileSync(LOG, `[${new Date().toISOString()}] ${args.join(" ")}\n`); } catch {}
-};
+const dbg = createFileLogger(LOG);
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-let input = "";
-const timeout = setTimeout(() => process.exit(0), 10000);
-
-process.stdin.setEncoding("utf8");
-process.stdin.on("data", (chunk) => (input += chunk));
-process.stdin.on("end", async () => {
-  clearTimeout(timeout);
+void (async () => {
+  const data = await readJsonFromStdin(10000);
   try {
-    const data = JSON.parse(input);
-    dbg("tool_name:", data.tool_name);
+    dbg("tool_name:", data?.tool_name);
 
-    const cwd = (data.cwd as string) || process.cwd();
-    const transcriptPath = data.transcript_path as string | undefined;
+    const cwd = (data?.cwd as string) || process.cwd();
+    const transcriptPath = data?.transcript_path as string | undefined;
     const sessionId = transcriptPath ? sessionIdFromTranscript(transcriptPath) : "";
-    const toolInput = data.tool_input as Record<string, unknown> | undefined;
+    const toolInput = data?.tool_input as Record<string, unknown> | undefined;
 
     // Resolve plan file path: use explicit field first, fall back to slug-derived path
     const planFilePath =
@@ -71,4 +62,4 @@ process.stdin.on("end", async () => {
     dbg("ERROR:", err);
   }
   process.exit(0);
-});
+})();

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "codex-code-review": {
+      "source": "smithery.ai",
+      "sourceType": "well-known",
+      "computedHash": "7cbfbbcbd5ccceee779761c1e6610e79eaea12f28680db2f73ec8e5292075b11"
+    }
+  }
+}
