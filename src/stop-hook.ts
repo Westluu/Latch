@@ -33,7 +33,7 @@ function isSocketAlive(socketPath: string): Promise<boolean> {
 }
 
 function trayCommand(cwd: string, sessionId: string): string {
-  const trayPy = resolve(__dirname, "..", "python", "tray.py");
+  const trayPy = resolve(__dirname, "..", "python", "ui", "tray.py");
   return `python3 "${trayPy}" "${cwd}" "${sessionId}"`;
 }
 

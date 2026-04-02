@@ -4,7 +4,7 @@ Latch workspaces picker TUI.
 Launched either in a left tmux pane or via `tmux display-popup`.
 
 Usage:
-    python3 projects.py <cwd>
+    python3 ui/projects.py <cwd>
 """
 
 from __future__ import annotations
@@ -13,6 +13,11 @@ import os
 import subprocess
 import sys
 from typing import Optional, Tuple
+
+UI_DIR = os.path.dirname(os.path.abspath(__file__))
+PYTHON_DIR = os.path.dirname(UI_DIR)
+if PYTHON_DIR not in sys.path:
+    sys.path.insert(0, PYTHON_DIR)
 
 from latch import theme
 from latch.projects_store import ProjectInfo, WorkspaceInfo, load_projects
@@ -1036,7 +1041,7 @@ class ProjectsApp(App):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python3 projects.py <cwd>", file=sys.stderr)
+        print("Usage: python3 ui/projects.py <cwd>", file=sys.stderr)
         sys.exit(1)
 
     cwd = os.path.abspath(sys.argv[1])

@@ -167,7 +167,7 @@ export function isPaneInCurrentSession(paneId: string): boolean {
 }
 
 function trayCommand(cwd: string, sessionId: string): string {
-  const pythonTray = join(__dirname, "..", "python", "tray.py");
+  const pythonTray = join(__dirname, "..", "python", "ui", "tray.py");
   return `python3 "${pythonTray}" "${cwd}" "${sessionId}"`;
 }
 
@@ -181,7 +181,7 @@ export function splitAndLaunchTray(cwd: string, sessionId: string = ""): string 
 }
 
 function sidecarCommand(cwd: string, sessionId: string = ""): string {
-  const pythonSidecar = join(__dirname, "..", "python", "sidecar.py");
+  const pythonSidecar = join(__dirname, "..", "python", "ui", "sidecar.py");
   return `python3 "${pythonSidecar}" "${cwd}" "${sessionId}"`;
 }
 
@@ -233,7 +233,7 @@ export function launchWithAgent(cwd: string, agentCommand: string): never {
     process.exit(result.status ?? 0);
   } else {
     const sessionName = uniqueSessionName();
-    const loadingPy = join(__dirname, "..", "python", "loading.py");
+    const loadingPy = join(__dirname, "..", "python", "ui", "loading.py");
     run(`tmux new-session -d -s ${sessionName} -c '${cwd}' 'python3 "${loadingPy}" "${agentCommand}"'`);
 
     const result = spawnSync("tmux", ["attach-session", "-t", sessionName], {
@@ -249,7 +249,7 @@ export function switchClientToAgentSession(cwd: string, agentCommand: string): n
   }
 
   const sessionName = uniqueSessionName();
-  const loadingPy = join(__dirname, "..", "python", "loading.py");
+  const loadingPy = join(__dirname, "..", "python", "ui", "loading.py");
   run(`tmux new-session -d -s ${sessionName} -c '${cwd}' 'python3 "${loadingPy}" "${agentCommand}"'`);
   run(`tmux switch-client -t ${sessionName}`);
   process.exit(0);
@@ -267,7 +267,7 @@ export function openAgentInTargetPane(originCwd: string, projectCwd: string, age
 
   saveSidecarTargetPaneId(originCwd, "", targetPane);
 
-  const loadingPy = join(__dirname, "..", "python", "loading.py");
+  const loadingPy = join(__dirname, "..", "python", "ui", "loading.py");
   run(`tmux respawn-pane -k -t ${targetPane} -c '${projectCwd}' 'python3 "${loadingPy}" "${agentCommand}"'`);
   run(`tmux select-pane -t ${targetPane}`);
   process.exit(0);
@@ -379,7 +379,7 @@ function resolveSidecarToggleTargetPane(cwd: string, sessionId: string, currentP
 // ── chat popup ──────────────────────────────────────────────────────────────
 
 function chatCommand(cwd: string, sessionId: string, claudePane: string): string {
-  const pythonChat = join(__dirname, "..", "python", "chat.py");
+  const pythonChat = join(__dirname, "..", "python", "ui", "chat.py");
   return `python3 "${pythonChat}" "${cwd}" "${sessionId}" "${claudePane}"`;
 }
 
@@ -393,7 +393,7 @@ export function openChatPopup(cwd: string, sessionId: string): void {
 }
 
 function projectsCommand(cwd: string): string {
-  const pythonProjects = join(__dirname, "..", "python", "projects.py");
+  const pythonProjects = join(__dirname, "..", "python", "ui", "projects.py");
   return `python3 "${pythonProjects}" "${cwd}"`;
 }
 

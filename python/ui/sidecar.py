@@ -2,7 +2,7 @@
 Latch sidecar TUI — file list + diff viewer + plans viewer.
 
 Usage:
-    python3 sidecar.py <cwd> [session_id]
+    python3 ui/sidecar.py <cwd> [session_id]
 """
 
 from __future__ import annotations
@@ -13,6 +13,11 @@ import os
 import signal
 import sys
 from typing import Optional
+
+UI_DIR = os.path.dirname(os.path.abspath(__file__))
+PYTHON_DIR = os.path.dirname(UI_DIR)
+if PYTHON_DIR not in sys.path:
+    sys.path.insert(0, PYTHON_DIR)
 
 from latch import theme
 from latch.git_state import STATUS_COLORS, get_changed_files, get_diff, render_diff
@@ -359,7 +364,7 @@ class SidecarApp(App):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python3 sidecar.py <cwd> [session_id]", file=sys.stderr)
+        print("Usage: python3 ui/sidecar.py <cwd> [session_id]", file=sys.stderr)
         sys.exit(1)
 
     cwd = os.path.abspath(sys.argv[1])

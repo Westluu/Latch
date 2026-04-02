@@ -5,6 +5,11 @@ import os
 import sys
 import time
 
+UI_DIR = os.path.dirname(os.path.abspath(__file__))
+PYTHON_DIR = os.path.dirname(UI_DIR)
+if PYTHON_DIR not in sys.path:
+    sys.path.insert(0, PYTHON_DIR)
+
 from latch import theme
 
 LATCH_ASCII = [

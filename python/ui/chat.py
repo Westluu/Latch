@@ -4,7 +4,7 @@ Latch chat popup TUI — conversation viewer for Claude Code sessions.
 Launched via `tmux display-popup` so it floats over all panes.
 
 Usage:
-    python3 chat.py <cwd> [session_id]
+    python3 ui/chat.py <cwd> [session_id]
 """
 
 from __future__ import annotations
@@ -16,6 +16,11 @@ import sys
 import textwrap
 from datetime import datetime, timezone
 from typing import Optional
+
+UI_DIR = os.path.dirname(os.path.abspath(__file__))
+PYTHON_DIR = os.path.dirname(UI_DIR)
+if PYTHON_DIR not in sys.path:
+    sys.path.insert(0, PYTHON_DIR)
 
 from latch import theme
 from latch.session_store import Message, SessionInfo, list_sessions, parse_messages
@@ -915,7 +920,7 @@ class ChatApp(App):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python3 chat.py <cwd> [session_id] [claude_pane]", file=sys.stderr)
+        print("Usage: python3 ui/chat.py <cwd> [session_id] [claude_pane]", file=sys.stderr)
         sys.exit(1)
 
     cwd = os.path.abspath(sys.argv[1])

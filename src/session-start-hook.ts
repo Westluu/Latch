@@ -49,7 +49,7 @@ process.stdin.on("end", async () => {
     // Launch tray below sidecar
     const sidecarPane = getSidecarPaneId(cwd, sessionId);
     const targetFlag = sidecarPane ? `-b -t ${sidecarPane}` : "";
-    const trayPy = resolve(__dirname, "..", "python", "tray.py");
+    const trayPy = resolve(__dirname, "..", "python", "ui", "tray.py");
     const trayCmd = `tmux split-window -v -l 10 -P -F '#{pane_id}' ${targetFlag} -c ${JSON.stringify(cwd)} 'python3 "${trayPy}" "${cwd}" "${sessionId}"'`;
     const trayPaneId = execSync(trayCmd, { encoding: "utf-8" }).trim();
     saveTrayPaneId(cwd, sessionId, trayPaneId);

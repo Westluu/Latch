@@ -2,7 +2,7 @@
 Latch turn tray TUI — horizontal card view of Claude Code turns.
 
 Usage:
-    python3 tray.py <cwd> <session_id>
+    python3 ui/tray.py <cwd> <session_id>
 """
 
 from __future__ import annotations
@@ -15,6 +15,11 @@ import shutil
 import sys
 from dataclasses import dataclass
 from datetime import datetime
+
+UI_DIR = os.path.dirname(os.path.abspath(__file__))
+PYTHON_DIR = os.path.dirname(UI_DIR)
+if PYTHON_DIR not in sys.path:
+    sys.path.insert(0, PYTHON_DIR)
 
 from latch import theme
 from latch.ipc import build_socket_path, cleanup_socket, send_json_message, start_ipc_server
@@ -322,7 +327,7 @@ class TrayApp(App):
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("Usage: python3 tray.py <cwd> <session_id>", file=sys.stderr)
+        print("Usage: python3 ui/tray.py <cwd> <session_id>", file=sys.stderr)
         sys.exit(1)
 
     cwd = os.path.abspath(sys.argv[1])
