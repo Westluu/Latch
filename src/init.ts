@@ -19,11 +19,13 @@ const HOOK_MARKER = "latch-hook";
 const TMUX_CONF_PATH = join(homedir(), ".tmux.conf");
 const TMUX_MARKER = "# latch-keybinding";
 const TMUX_WORKSPACES_MARKER = "# latch-workspaces-keybinding";
+const TMUX_MOUSE_MARKER = "# latch-mouse-mode";
 // CMD+E in iTerm2 sends ESC+e (M-e) when configured to send escape sequence "e"
 const TMUX_KEYBINDING_LINE = `bind-key -n M-e run-shell "latch toggle"`;
 const TMUX_WORKSPACES_KEYBINDING_LINE = `bind-key -n M-p run-shell "latch workspaces"`;
 const TMUX_CHAT_KEYBINDING_LINE = `bind-key -n M-s run-shell "latch chat"`;
 const TMUX_CHAT_MARKER = "# latch-chat-keybinding";
+const TMUX_MOUSE_LINE = "set -g mouse on";
 
 function getHookCommand(): string {
   const hookScript = resolve(import.meta.dirname, "hook.js");
@@ -181,6 +183,11 @@ function hasTmuxWorkspacesKeybinding(): boolean {
   return readFileSync(TMUX_CONF_PATH, "utf-8").includes(TMUX_WORKSPACES_MARKER);
 }
 
+function hasTmuxMouseMode(): boolean {
+  if (!existsSync(TMUX_CONF_PATH)) return false;
+  return readFileSync(TMUX_CONF_PATH, "utf-8").includes(TMUX_MOUSE_MARKER);
+}
+
 function addTmuxChatKeybinding(): void {
   const existing = existsSync(TMUX_CONF_PATH) ? readFileSync(TMUX_CONF_PATH, "utf-8") : "";
   writeFileSync(TMUX_CONF_PATH, existing + `\n${TMUX_CHAT_MARKER}\n${TMUX_CHAT_KEYBINDING_LINE}\n`);
@@ -197,8 +204,18 @@ function addTmuxKeybinding(): void {
   const existing = existsSync(TMUX_CONF_PATH) ? readFileSync(TMUX_CONF_PATH, "utf-8") : "";
   writeFileSync(
     TMUX_CONF_PATH,
-    existing + `\n${TMUX_MARKER}\n${TMUX_KEYBINDING_LINE}\n${TMUX_WORKSPACES_MARKER}\n${TMUX_WORKSPACES_KEYBINDING_LINE}\n${TMUX_CHAT_MARKER}\n${TMUX_CHAT_KEYBINDING_LINE}\n`
+    existing
+      + `\n${TMUX_MARKER}\n${TMUX_KEYBINDING_LINE}\n`
+      + `${TMUX_WORKSPACES_MARKER}\n${TMUX_WORKSPACES_KEYBINDING_LINE}\n`
+      + `${TMUX_CHAT_MARKER}\n${TMUX_CHAT_KEYBINDING_LINE}\n`
+      + `${TMUX_MOUSE_MARKER}\n${TMUX_MOUSE_LINE}\n`
   );
+  try { execSync(`tmux source-file "${TMUX_CONF_PATH}" 2>/dev/null`); } catch {}
+}
+
+function addTmuxMouseMode(): void {
+  const existing = existsSync(TMUX_CONF_PATH) ? readFileSync(TMUX_CONF_PATH, "utf-8") : "";
+  writeFileSync(TMUX_CONF_PATH, existing + `\n${TMUX_MOUSE_MARKER}\n${TMUX_MOUSE_LINE}\n`);
   try { execSync(`tmux source-file "${TMUX_CONF_PATH}" 2>/dev/null`); } catch {}
 }
 
@@ -206,6 +223,7 @@ function removeTmuxKeybinding(): void {
   if (!existsSync(TMUX_CONF_PATH)) return;
   const content = readFileSync(TMUX_CONF_PATH, "utf-8");
   const cleaned = content
+    .replace(new RegExp(`\\n?${TMUX_MOUSE_MARKER}\\n${TMUX_MOUSE_LINE}\\n?`, "g"), "")
     .replace(new RegExp(`\\n?${TMUX_CHAT_MARKER}\\n${TMUX_CHAT_KEYBINDING_LINE}\\n?`, "g"), "")
     .replace(new RegExp(`\\n?${TMUX_WORKSPACES_MARKER}\\n${TMUX_WORKSPACES_KEYBINDING_LINE}\\n?`, "g"), "")
     .replace(new RegExp(`\\n?${TMUX_MARKER}\\n${TMUX_KEYBINDING_LINE}\\n?`, "g"), "\n");
@@ -264,6 +282,8 @@ export function initHook(options: { autoInstallTmux?: boolean; autoInstallPython
 
   if (!hasTmuxKeybinding()) {
     addTmuxKeybinding();
+  } else if (!hasTmuxMouseMode()) {
+    addTmuxMouseMode();
   } else if (!hasTmuxWorkspacesKeybinding()) {
     addTmuxWorkspacesKeybinding();
   } else if (!hasTmuxChatKeybinding()) {
