@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Optional, Tuple
 
 from latch import theme
+from latch.projects_store import ProjectInfo
+from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Input, ListView, Static
+from textual.widgets import Button, Input, ListView, Select, Static
 
 try:
     from .projects_widgets import DirectorySuggestionItem, shorten_path
@@ -398,3 +401,315 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
             self.query_one("#modal-alias", Input).focus()
             return
         self.dismiss((alias, path))
+
+
+class AddWorktreeModal(ModalScreen[Optional[Tuple[str, str]]]):
+    """Modal for adding a new workspace/worktree to an existing project.
+
+    Dismisses with (workspace_name, copy_from) where copy_from is the
+    workspace name to base the new workspace on, or None if cancelled.
+    """
+
+    CSS = """
+    AddWorktreeModal {
+        align: center middle;
+        background: %(overlay_bg)s;
+    }
+
+    #worktree-modal {
+        width: 76;
+        min-width: 54;
+        max-width: 92%%;
+        max-height: 100%%;
+        background: %(modal_bg)s;
+        border: round %(border)s;
+        padding: 0 1;
+        height: auto;
+    }
+
+    #worktree-header {
+        height: 4;
+        padding: 0 1 0 2;
+        border-bottom: solid %(border_subtle)s;
+        align: left middle;
+    }
+
+    #worktree-title {
+        width: 1fr;
+        color: %(text_high)s;
+        text-style: bold;
+        content-align: left middle;
+    }
+
+    #worktree-close-hint {
+        width: auto;
+        color: %(text_subtle)s;
+        content-align: right middle;
+    }
+
+    #worktree-body {
+        padding: 1 2;
+        height: auto;
+    }
+
+    .wt-label {
+        color: %(text_muted)s;
+        height: 1;
+        margin: 1 0 0 0;
+    }
+
+    .wt-input {
+        width: 1fr;
+        border: round %(border)s;
+        background: %(panel_bg)s;
+        margin: 0 0 1 0;
+        padding: 0 1;
+        color: %(text_primary)s;
+    }
+
+    .wt-input:focus {
+        border: round %(border_focus)s;
+    }
+
+    #wt-path-display {
+        height: 3;
+        border: round %(border_subtle)s;
+        background: %(panel_bg)s;
+        color: %(text_subtle)s;
+        padding: 0 1;
+        margin: 0 0 1 0;
+        content-align: left middle;
+    }
+
+    #wt-copy-select {
+        width: 1fr;
+        height: auto;
+        margin: 0 0 1 0;
+    }
+
+    #wt-copy-select > SelectCurrent {
+        border: round %(border)s;
+        background: %(panel_bg)s;
+        color: %(text_primary)s;
+        padding: 0 1;
+    }
+
+    #wt-copy-select:focus > SelectCurrent,
+    #wt-copy-select.-expanded > SelectCurrent {
+        border: round %(border_focus)s;
+    }
+
+    #wt-copy-select > SelectOverlay {
+        width: 1fr;
+        max-height: 8;
+        border: round %(border_subtle)s;
+        background: %(panel_bg)s;
+        color: %(text_primary)s;
+    }
+
+    #wt-copy-select .option-list--option {
+        padding: 0 1;
+        color: %(text_muted)s;
+    }
+
+    #wt-copy-select .option-list--option-highlighted,
+    #wt-copy-select .option-list--option-hover {
+        background: %(row_selection_bg)s;
+        color: %(text_high)s;
+    }
+
+    #wt-footer {
+        height: 4;
+        border-top: solid %(border_subtle)s;
+        padding: 0 1 0 2;
+        align: left middle;
+    }
+
+    #wt-footer-spacer {
+        width: 1fr;
+    }
+
+    Button.wt-action-btn {
+        width: 18;
+        min-width: 18;
+        max-width: 18;
+        height: 3;
+        padding: 0;
+        border: round %(border)s;
+        background: %(panel_bg)s;
+        color: %(text_muted)s;
+        margin: 0 0 0 1;
+        content-align: center middle;
+        text-align: center;
+    }
+
+    Button#wt-cancel-btn {
+        background: %(panel_bg)s;
+        color: %(text_secondary)s;
+    }
+
+    Button#wt-cancel-btn:focus {
+        border: round %(border_focus)s;
+        color: %(text_primary)s;
+    }
+
+    Button#wt-create-btn {
+        border: round %(accent_soft)s;
+        background: %(panel_bg)s;
+        color: %(accent_soft)s;
+    }
+
+    Button#wt-create-btn:focus {
+        border: round %(border_focus)s;
+        background: %(panel_bg)s;
+        color: %(text_primary)s;
+    }
+
+    Button#wt-create-btn:disabled {
+        background: %(panel_bg)s;
+        border: round %(border_subtle)s;
+        color: %(text_subtle)s;
+    }
+    """ % {
+        "accent": theme.ACCENT,
+        "accent_soft": theme.ACCENT_SOFT,
+        "app_bg": theme.APP_BG,
+        "border": theme.BORDER,
+        "border_focus": theme.BORDER_FOCUS,
+        "border_subtle": theme.BORDER_SUBTLE,
+        "modal_bg": theme.MODAL_BG,
+        "overlay_bg": theme.OVERLAY_BG,
+        "panel_bg": theme.PANEL_BG,
+        "text_high": theme.TEXT_HIGH,
+        "text_muted": theme.TEXT_MUTED,
+        "text_primary": theme.TEXT_PRIMARY,
+        "text_secondary": theme.TEXT_SECONDARY,
+        "text_subtle": theme.TEXT_SUBTLE,
+        "row_selection_bg": theme.ROW_SELECTION_BG,
+    }
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("left", "footer_left", show=False, priority=True),
+        Binding("right", "footer_right", show=False, priority=True),
+    ]
+
+    def __init__(self, project: ProjectInfo) -> None:
+        super().__init__()
+        self.project = project
+        self._workspace_names: list[str] = [w.name for w in project.workspaces]
+        preferred_workspace = project.default_workspace if project.default_workspace in self._workspace_names else None
+        self._copy_from: str = preferred_workspace or self._workspace_names[0]
+
+    def _copy_from_options(self) -> list[tuple[str, str]]:
+        return [(name, name) for name in self._workspace_names]
+
+    def _slug(self, name: str) -> str:
+        return re.sub(r"[^a-z0-9-]", "-", name.lower().strip()).strip("-")
+
+    def _preview_path(self, name: str) -> str:
+        slug = self._slug(name) or "<name>"
+        return f".latch/workspaces/{slug}"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="worktree-modal"):
+            with Horizontal(id="worktree-header"):
+                yield Static("Add Workspace", id="worktree-title")
+                yield Static("esc", id="worktree-close-hint")
+            with Vertical(id="worktree-body"):
+                yield Static("Workspace name", classes="wt-label")
+                yield Input(placeholder="e.g. feature-branch", id="wt-name-input", classes="wt-input")
+                yield Static("Path", classes="wt-label")
+                yield Static(self._preview_path(""), id="wt-path-display")
+                yield Static("Base workspace", classes="wt-label")
+                yield Select(
+                    self._copy_from_options(),
+                    value=self._copy_from,
+                    allow_blank=False,
+                    id="wt-copy-select",
+                )
+            with Horizontal(id="wt-footer"):
+                yield Static("", id="wt-footer-spacer")
+                yield Button("esc  Cancel", id="wt-cancel-btn", classes="wt-action-btn")
+                yield Button("enter  Create", id="wt-create-btn", classes="wt-action-btn", disabled=True)
+
+    def on_mount(self) -> None:
+        self.query_one("#wt-copy-select", Select).value = self._copy_from
+        self.query_one("#wt-name-input", Input).focus()
+
+    def _refresh_path(self) -> None:
+        name = self.query_one("#wt-name-input", Input).value
+        self.query_one("#wt-path-display", Static).update(self._preview_path(name))
+
+    def _refresh_create_button(self) -> None:
+        name = self.query_one("#wt-name-input", Input).value.strip()
+        self.query_one("#wt-create-btn", Button).disabled = not bool(name)
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "wt-name-input":
+            self._refresh_path()
+            self._refresh_create_button()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "wt-name-input":
+            return
+        self.action_create()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id != "wt-copy-select":
+            return
+        self._copy_from = str(event.value)
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key not in {"up", "down"}:
+            return
+
+        focused = self.focused
+        if focused is None:
+            return
+
+        name_input = self.query_one("#wt-name-input", Input)
+        copy_select = self.query_one("#wt-copy-select", Select)
+        cancel_button = self.query_one("#wt-cancel-btn", Button)
+        create_button = self.query_one("#wt-create-btn", Button)
+
+        if focused is name_input and event.key == "down":
+            copy_select.focus()
+            event.stop()
+            return
+
+        if focused in {cancel_button, create_button} and event.key == "up":
+            copy_select.focus()
+            event.stop()
+
+    def _footer_buttons(self) -> tuple[Button, Button]:
+        return (
+            self.query_one("#wt-cancel-btn", Button),
+            self.query_one("#wt-create-btn", Button),
+        )
+
+    def action_footer_left(self) -> None:
+        cancel_button, create_button = self._footer_buttons()
+        if self.focused in {cancel_button, create_button}:
+            cancel_button.focus()
+
+    def action_footer_right(self) -> None:
+        cancel_button, create_button = self._footer_buttons()
+        if self.focused in {cancel_button, create_button} and not create_button.disabled:
+            create_button.focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        btn_id = event.button.id or ""
+        if btn_id == "wt-cancel-btn":
+            self.action_cancel()
+        elif btn_id == "wt-create-btn":
+            self.action_create()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def action_create(self) -> None:
+        name = self.query_one("#wt-name-input", Input).value.strip()
+        if not name:
+            return
+        self.dismiss((self._slug(name), self._copy_from))

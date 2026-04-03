@@ -21,16 +21,17 @@ except ImportError:
 bootstrap_python_root()
 
 from latch.projects_store import ProjectInfo, WorkspaceInfo, load_projects
+from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
-from textual.widgets import Footer, Header, Input, ListItem, ListView, Static
+from textual.containers import Horizontal
+from textual.widgets import Footer, Header, Input, ListItem, ListView, Rule, Static
 
 try:
-    from .projects_modal import AddWorkspaceModal
+    from .projects_modal import AddWorkspaceModal, AddWorktreeModal
     from .projects_widgets import PROJECTS_LIST_CSS, ProjectListItem, WorkspaceListItem
 except ImportError:
-    from projects_modal import AddWorkspaceModal
+    from projects_modal import AddWorkspaceModal, AddWorktreeModal
     from projects_widgets import PROJECTS_LIST_CSS, ProjectListItem, WorkspaceListItem
 
 T = TypeVar("T")
@@ -41,17 +42,17 @@ class ProjectsApp(App):
 
     BINDINGS = [
         Binding("escape", "close_or_cancel", "Close"),
+        Binding("a", "start_add", "Add"),
         Binding("q", "quit", "Quit"),
-        Binding("j,down", "cursor_down", "Down"),
-        Binding("k,up", "cursor_up", "Up"),
+        Binding("d", "delete_selected", "Delete"),
         Binding("enter", "open_selected", "Open"),
         Binding("ctrl+t,t", "open_selected_in_tab", "Open in Tab", show=False, priority=True),
         Binding("right,l", "view_workspaces", "Workspaces", show=False, priority=True),
         Binding("left,h,backspace", "back", "Back", show=False, priority=True),
         Binding("slash", "focus_search", "Search", show=False),
-        Binding("a", "start_add", "Add"),
-        Binding("d", "delete_selected", "Delete"),
-        Binding("r", "refresh", "Refresh"),
+        Binding("j,down", "cursor_down", "Down"),
+        Binding("k,up", "cursor_up", "Up"),
+        Binding("r", "refresh", "Refresh", show=False),
     ]
 
     def __init__(self, cwd: str) -> None:
@@ -68,11 +69,13 @@ class ProjectsApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
-        with Vertical():
+        yield Rule(id="header-rule")
+        with Horizontal(id="search-bar"):
+            yield Static("○", id="search-icon")
             yield Input(placeholder="Search projects…", id="search-input")
-            yield ListView(id="projects-list")
-            yield Static("", id="empty-state")
-            yield Static("", id="status")
+        yield ListView(id="projects-list")
+        yield Static("", id="empty-state")
+        yield Static("", id="status")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -288,6 +291,20 @@ class ProjectsApp(App):
         alias, path = result
         self._submit_add(alias, path)
 
+    def _after_add_worktree_modal(self, result: Optional[Tuple[str, str]]) -> None:
+        self.query_one("#projects-list", ListView).focus()
+        if result is None:
+            self._set_status("Add canceled.")
+            return
+
+        project = self._active_project()
+        if project is None:
+            self._set_status("Could not determine the active project.")
+            return
+
+        workspace_name, copy_from = result
+        self._submit_add_worktree(project.alias, workspace_name, copy_from)
+
     def action_close_or_cancel(self) -> None:
         if self._pending_delete_alias is not None:
             self._pending_delete_alias = None
@@ -300,7 +317,12 @@ class ProjectsApp(App):
 
         self.exit()
 
+    def _skip_if_modal_open(self) -> None:
+        if self.screen.is_modal:
+            raise SkipAction()
+
     def action_back(self) -> None:
+        self._skip_if_modal_open()
         if self._mode != "workspaces":
             self.exit()
             return
@@ -317,13 +339,18 @@ class ProjectsApp(App):
         self.query_one("#search-input", Input).focus()
 
     def action_start_add(self) -> None:
-        if self._mode != "projects":
-            self._set_status("Add project is only available from the project list.")
-            return
         self._clear_delete_confirmation()
+        if self._mode == "workspaces":
+            project = self._active_project()
+            if project is None:
+                self._set_status("Could not determine the active project.")
+                return
+            self.push_screen(AddWorktreeModal(project), self._after_add_worktree_modal)
+            return
         self.push_screen(AddWorkspaceModal(self.cwd), self._after_add_modal)
 
     def action_view_workspaces(self) -> None:
+        self._skip_if_modal_open()
         project = self._selected_project()
         if not project:
             return
@@ -385,6 +412,25 @@ class ProjectsApp(App):
         self._sync_list(select_alias=alias)
         self.query_one("#projects-list", ListView).focus()
         self._set_status(result.stdout.strip() or f'Saved project "{alias}".')
+
+    def _submit_add_worktree(self, project_alias: str, workspace_name: str, copy_from: str) -> None:
+        if not workspace_name:
+            self._set_status("Workspace name is required.")
+            return
+
+        args = ["workspace", "add", project_alias, workspace_name, "--copy-from", copy_from]
+
+        result = self._run_cli(args)
+        if result is None:
+            return
+        if result.returncode != 0:
+            self._set_status(result.stderr.strip() or result.stdout.strip() or "Could not add workspace.")
+            return
+
+        self._refresh_projects()
+        self._sync_list(select_workspace=workspace_name, clear_status=True)
+        self.query_one("#projects-list", ListView).focus()
+        self._set_status(result.stdout.strip() or f'Created workspace "{workspace_name}".')
 
     def _open_selected_target(self, *, in_tab: bool) -> None:
         flag = "--tab" if in_tab else "--current-session"
