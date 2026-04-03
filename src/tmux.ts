@@ -440,8 +440,9 @@ export function focusOrOpenWorkspaces(cwd: string): void {
 export function killLatchPanes(cwd: string, sessionId: string = ""): void {
   const sidecarPane = getSidecarPaneId(cwd, sessionId);
   const trayPane = getTrayPaneId(cwd, sessionId);
+  const workspacesPane = getWorkspacesPaneId(cwd);
 
-  for (const paneId of [sidecarPane, trayPane]) {
+  for (const paneId of [sidecarPane, trayPane, workspacesPane]) {
     if (!paneId) continue;
     try {
       execSync(`tmux kill-pane -t ${paneId} 2>/dev/null`);
@@ -449,7 +450,13 @@ export function killLatchPanes(cwd: string, sessionId: string = ""): void {
   }
 
   // Clean up pane ID files
-  for (const path of [sidecarPanePath(cwd, sessionId), trayPanePath(cwd, sessionId), sidecarTargetPanePath(cwd, sessionId)]) {
+  for (const path of [
+    sidecarPanePath(cwd, sessionId),
+    trayPanePath(cwd, sessionId),
+    workspacesPanePath(cwd),
+    projectTargetPanePath(cwd),
+    sidecarTargetPanePath(cwd, sessionId),
+  ]) {
     removePaneState(path);
   }
 }
