@@ -418,7 +418,13 @@ class ProjectsApp(App):
             self._set_status("Workspace name is required.")
             return
 
-        args = ["workspace", "add", project_alias, workspace_name, "--copy-from", copy_from]
+        branch = copy_from
+        for workspace in self._workspaces:
+            if workspace.name == copy_from:
+                branch = workspace.branch or workspace.name
+                break
+
+        args = ["workspace", "create", project_alias, workspace_name, branch]
 
         result = self._run_cli(args)
         if result is None:
