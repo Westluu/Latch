@@ -27,74 +27,100 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
     }
 
     #add-modal {
-        width: 84;
-        min-width: 60;
-        max-width: 96%%;
+        width: 76;
+        min-width: 54;
+        max-width: 92%%;
+        max-height: 30;
         height: auto;
         background: %(modal_bg)s;
-        padding: 0;
-    }
-
-    .main-panel {
         border: round %(border)s;
-        background: %(app_bg)s;
+        padding: 0 1;
+        overflow: hidden hidden;
+    }
+
+    #add-header {
+        height: 4;
+        padding: 0 1 0 2;
+        border-bottom: solid %(border_subtle)s;
+        align: left middle;
+    }
+
+    #add-title {
+        width: 1fr;
+        color: %(text_high)s;
+        text-style: bold;
+        content-align: left middle;
+    }
+
+    #add-close-hint {
+        width: auto;
+        color: %(text_subtle)s;
+        content-align: right middle;
+    }
+
+    #add-body {
         padding: 1 2;
+        height: auto;
+        max-height: 22;
+        overflow-y: auto;
     }
 
-    #details-panel {
-        height: auto;
+    #add-footer {
+        height: 4;
+        border-top: solid %(border_subtle)s;
+        padding: 0 1 0 2;
+        align: left middle;
     }
 
-    #preview-panel {
-        height: auto;
-        min-height: 8;
+    #add-footer-spacer {
+        width: 1fr;
+    }
+
+    .add-label {
+        color: %(text_muted)s;
+        height: 1;
         margin: 1 0 0 0;
     }
 
-    #actions-row {
-        align: center middle;
-        height: 3;
-    }
-
-    .panel-title {
-        color: %(text_secondary)s;
-        text-style: bold;
-        padding: 0 0 1 0;
-    }
-
-    .field-row {
+    .add-field-row {
         height: auto;
-        margin: 0 0 1 0;
         align: left top;
     }
 
-    .field-label {
+    .add-input-label {
         width: 16;
         min-width: 16;
         color: %(text_muted)s;
         padding: 1 1 0 0;
     }
 
-    .field-input {
-        width: 1fr;
-        min-width: 0;
+    .add-input {
+        border: round %(border)s;
+        background: %(panel_bg)s;
+        margin: 0 0 1 0;
+        padding: 0 1;
+        color: %(text_primary)s;
     }
 
-    .field-stack {
+    .add-input:focus {
+        border: round %(border_focus)s;
+    }
+
+    .add-field-stack {
         width: 1fr;
         min-width: 0;
     }
 
     #modal-alias,
     #modal-path {
-        margin: 0;
+        width: 1fr;
     }
 
     #matches-panel {
         width: 1fr;
         min-width: 0;
         height: auto;
-        margin: 1 0 0 0;
+        margin: 0 0 1 0;
         border: round %(border_subtle)s;
         background: %(panel_bg)s;
         padding: 0 1;
@@ -106,7 +132,7 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
     }
 
     #matches-list {
-        height: 5;
+        height: 4;
         padding: 0;
         border: none;
         background: transparent;
@@ -125,51 +151,61 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
     }
 
     .directory-row.-selected {
-        background: %(selection_bg)s;
+        background: %(row_selection_bg)s;
         color: %(text_high)s;
     }
 
-    #preview-title {
-        color: %(text_secondary)s;
-        text-style: bold;
-        padding: 0 0 1 0;
-    }
-
-    #preview-content {
-        color: %(text_muted)s;
-    }
-
-    .action-button {
-        width: auto;
+    Button.add-action-btn {
+        width: 18;
         min-width: 18;
-        color: %(text_button)s;
-        background: %(button_bg)s;
-        border: tall %(border)s;
+        max-width: 18;
+        height: 3;
+        padding: 0;
+        border: round %(border)s;
+        background: %(panel_bg)s;
+        color: %(text_muted)s;
+        margin: 0 0 0 1;
         content-align: center middle;
-        padding: 0 2;
-        margin: 0 1 0 0;
+        text-align: center;
     }
 
-    .action-button.-primary {
-        background: %(button_bg_primary)s;
-        border: tall %(button_border_primary)s;
+    Button#add-cancel-btn {
+        background: %(panel_bg)s;
+        color: %(text_secondary)s;
+    }
+
+    Button#add-cancel-btn:focus,
+    Button#add-create-btn:focus {
+        border: round %(border_focus)s;
+        background: %(panel_bg)s;
+        color: %(text_primary)s;
+    }
+
+    Button#add-create-btn {
+        border: round %(accent_soft)s;
+        background: %(panel_bg)s;
+        color: %(accent_soft)s;
+    }
+
+    Button#add-create-btn:disabled {
+        background: %(panel_bg)s;
+        border: round %(border_subtle)s;
+        color: %(text_subtle)s;
     }
     """ % {
-        "app_bg": theme.APP_BG,
+        "accent_soft": theme.ACCENT_SOFT,
         "border": theme.BORDER,
+        "border_focus": theme.BORDER_FOCUS,
         "border_subtle": theme.BORDER_SUBTLE,
-        "button_bg": theme.BUTTON_BG,
-        "button_bg_primary": theme.BUTTON_BG_PRIMARY,
-        "button_border_primary": theme.BUTTON_BORDER_PRIMARY,
         "modal_bg": theme.MODAL_BG,
         "overlay_bg": theme.OVERLAY_BG,
         "panel_bg": theme.PANEL_BG,
-        "selection_bg": theme.SELECTION_BG,
-        "text_button": theme.TEXT_BUTTON,
+        "row_selection_bg": theme.ROW_SELECTION_BG,
         "text_high": theme.TEXT_HIGH,
         "text_muted": theme.TEXT_MUTED,
         "text_primary": theme.TEXT_PRIMARY,
         "text_secondary": theme.TEXT_SECONDARY,
+        "text_subtle": theme.TEXT_SUBTLE,
     }
 
     BINDINGS = [
@@ -190,32 +226,41 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="add-modal"):
-            with Vertical(id="details-panel", classes="main-panel"):
-                yield Static("PROJECT DETAILS", classes="panel-title")
-                with Horizontal(classes="field-row"):
-                    yield Static("Project Name:", classes="field-label")
-                    yield Input(placeholder="Alias", id="modal-alias", classes="field-input")
-                with Horizontal(classes="field-row"):
-                    yield Static("Project Path:", classes="field-label")
-                    with Vertical(classes="field-stack"):
-                        yield Input(value=self.cwd, placeholder="Path", id="modal-path", classes="field-input")
+            with Horizontal(id="add-header"):
+                yield Static("Add Project", id="add-title")
+                yield Static("esc", id="add-close-hint")
+            with Vertical(id="add-body"):
+                yield Static("Project details", classes="add-label")
+                with Horizontal(classes="add-field-row"):
+                    yield Static("Project name", classes="add-input-label")
+                    yield Input(placeholder="Alias", id="modal-alias", classes="add-input")
+                with Horizontal(classes="add-field-row"):
+                    yield Static("Project path", classes="add-input-label")
+                    with Vertical(classes="add-field-stack"):
+                        yield Input(value=self.cwd, placeholder="Path", id="modal-path", classes="add-input")
                         with Vertical(id="matches-panel"):
                             yield Static("MATCHES (TAB TO NAVIGATE)", id="matches-title")
                             yield ListView(id="matches-list")
-            with Vertical(id="preview-panel", classes="main-panel"):
-                yield Static("PATH PREVIEW", id="preview-title")
-                yield Static("", id="preview-path")
-                yield Static("", id="preview-content")
-            with Horizontal(id="actions-row"):
-                yield Static("[ CREATE PROJECT ]", classes="action-button -primary")
-                yield Static("[ CANCEL ]", classes="action-button")
+            with Horizontal(id="add-footer"):
+                yield Static("", id="add-footer-spacer")
+                yield Button("esc  Cancel", id="add-cancel-btn", classes="add-action-btn")
+                yield Button("enter  Add", id="add-create-btn", classes="add-action-btn", disabled=True)
 
     def on_mount(self) -> None:
         self._refresh_matches()
+        self._refresh_create_button()
         self.query_one("#modal-alias", Input).focus()
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+    def action_create(self) -> None:
+        alias = self.query_one("#modal-alias", Input).value.strip()
+        path = self._submission_path()
+        if not alias:
+            self.query_one("#modal-alias", Input).focus()
+            return
+        self.dismiss((alias, path))
 
     def _display_path(self, path: str) -> str:
         home = os.path.expanduser("~")
@@ -287,41 +332,15 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
         matches.sort(key=lambda path: os.path.basename(path).lower())
         return matches[:8]
 
-    def _preview_lines(self, path: str) -> str:
-        if not os.path.isdir(path):
-            return "Directory not found yet."
-
-        lines: list[str] = []
-        try:
-            entries = sorted(os.scandir(path), key=lambda entry: (not entry.is_dir(), entry.name.lower()))
-            for entry in entries[:8]:
-                suffix = "/" if entry.is_dir() else ""
-                lines.append(f"{entry.name}{suffix}")
-        except OSError as error:
-            return f"Could not read directory: {error}"
-
-        if not lines:
-            return "(empty directory)"
-        return "\n".join(lines)
-
-    def _preview_target(self) -> str:
-        resolved = self._resolve_input_path()
-        if os.path.isdir(resolved):
-            return resolved
-        return self._selected_suggestion_path() or resolved
-
     def _submission_path(self) -> str:
         resolved = self._resolve_input_path()
         if os.path.isdir(resolved):
             return resolved
         return self._selected_suggestion_path() or self.query_one("#modal-path", Input).value.strip() or self.cwd
 
-    def _refresh_preview(self) -> None:
-        target = self._preview_target()
-        display_path = shorten_path(self._display_path(target), 54)
-        self.query_one("#preview-title", Static).update(f"PATH PREVIEW: {display_path}")
-        self.query_one("#preview-path", Static).update("")
-        self.query_one("#preview-content", Static).update(self._preview_lines(target))
+    def _refresh_create_button(self) -> None:
+        alias = self.query_one("#modal-alias", Input).value.strip()
+        self.query_one("#add-create-btn", Button).disabled = not bool(alias)
 
     def _refresh_matches(self) -> None:
         list_view = self.query_one("#matches-list", ListView)
@@ -339,8 +358,6 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
             self._set_selected_suggestion(0)
         else:
             self._set_selected_suggestion(None)
-
-        self._refresh_preview()
 
     def action_tab_next(self) -> None:
         if self.focused is self.query_one("#modal-alias", Input):
@@ -362,7 +379,6 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
         next_index = (current_index + 1) % len(self._suggestion_paths)
         list_view.index = next_index
         self._set_selected_suggestion(next_index)
-        self._refresh_preview()
 
     def action_prev_match(self) -> None:
         if not self._suggestion_paths:
@@ -372,17 +388,25 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
         next_index = (current_index - 1) % len(self._suggestion_paths)
         list_view.index = next_index
         self._set_selected_suggestion(next_index)
-        self._refresh_preview()
 
     def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "modal-alias":
+            self._refresh_create_button()
+            return
         if event.input.id == "modal-path":
             self._refresh_matches()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        btn_id = event.button.id or ""
+        if btn_id == "add-cancel-btn":
+            self.action_cancel()
+        elif btn_id == "add-create-btn":
+            self.action_create()
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
         if event.list_view.id != "matches-list":
             return
         self._set_selected_suggestion(event.list_view.index)
-        self._refresh_preview()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "modal-alias":
@@ -395,12 +419,7 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
         if self._apply_selected_suggestion():
             return
 
-        alias = self.query_one("#modal-alias", Input).value.strip()
-        path = self._submission_path()
-        if not alias:
-            self.query_one("#modal-alias", Input).focus()
-            return
-        self.dismiss((alias, path))
+        self.action_create()
 
 
 class AddWorktreeModal(ModalScreen[Optional[Tuple[str, str]]]):
