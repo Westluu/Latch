@@ -34,7 +34,7 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
         height: 31;
         background: %(modal_bg)s;
         border: round %(border)s;
-        padding: 0 1 1 1;
+        padding: 0 1;
         overflow: hidden hidden;
     }
 
@@ -67,12 +67,18 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
     #add-footer {
         height: 4;
         border-top: solid %(border_subtle)s;
-        padding: 0 1 0 2;
+        padding: 0 1;
         align: left middle;
     }
 
-    #add-footer-spacer {
+    .add-footer-spacer {
         width: 1fr;
+    }
+
+    #add-footer-buttons {
+        width: auto;
+        height: 3;
+        align: center middle;
     }
 
     .add-field-row {
@@ -119,13 +125,17 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
         padding: 0 1;
     }
 
+    #matches-panel:focus-within {
+        border: round %(border_focus)s;
+    }
+
     #matches-title {
         color: %(text_muted)s;
         padding: 0 0 1 0;
     }
 
     #matches-list {
-        height: 6;
+        height: 7;
         padding: 0;
         border: none;
         background: transparent;
@@ -185,9 +195,13 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
         border: round %(border)s;
         background: %(panel_bg)s;
         color: %(text_muted)s;
-        margin: 0 0 0 1;
+        margin: 0 1 0 0;
         content-align: center middle;
         text-align: center;
+    }
+
+    Button#add-create-btn {
+        margin: 0;
     }
 
     Button#add-cancel-btn {
@@ -259,9 +273,11 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
                             yield Static("MATCHES (TAB TO NAVIGATE)", id="matches-title")
                             yield ListView(id="matches-list")
             with Horizontal(id="add-footer"):
-                yield Static("", id="add-footer-spacer")
-                yield Button("esc  Cancel", id="add-cancel-btn", classes="add-action-btn")
-                yield Button("enter  Add", id="add-create-btn", classes="add-action-btn", disabled=True)
+                yield Static("", classes="add-footer-spacer")
+                with Horizontal(id="add-footer-buttons"):
+                    yield Button("esc  Cancel", id="add-cancel-btn", classes="add-action-btn")
+                    yield Button("enter  Add", id="add-create-btn", classes="add-action-btn", disabled=True)
+                yield Static("", classes="add-footer-spacer")
 
     def on_mount(self) -> None:
         self._refresh_matches()
@@ -315,7 +331,10 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
         if os.path.normpath(current_resolved) == os.path.normpath(selected_path):
             return False
 
-        path_input.value = self._display_path(selected_path)
+        display_path = self._display_path(selected_path)
+        if not display_path.endswith(os.sep):
+            display_path = f"{display_path}{os.sep}"
+        path_input.value = display_path
         path_input.focus()
         self._refresh_matches()
         return True
@@ -460,6 +479,11 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
         if event.list_view.id != "matches-list":
             return
         self._set_selected_suggestion(event.list_view.index)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if event.list_view.id != "matches-list":
+            return
+        self._apply_selected_suggestion()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "modal-alias":
