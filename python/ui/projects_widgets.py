@@ -245,8 +245,9 @@ class DirectorySuggestionItem(ListItem):
         self.path = path
         name = os.path.basename(path.rstrip(os.sep)) or path
         parent = shorten_path(os.path.dirname(path), 24)
-        label = f"[bold {theme.TEXT_PRIMARY}]{name}/[/] [{theme.TEXT_SUBTLE}]{parent}[/]"
-        self._row = Static(label, classes="directory-row")
+        self._name = Static(f"{name}/", classes="directory-name")
+        self._parent = Static(parent, classes="directory-parent")
+        self._row = Vertical(self._name, self._parent, classes="directory-row")
 
     def compose(self) -> ComposeResult:
         yield self._row

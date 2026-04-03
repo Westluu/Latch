@@ -139,17 +139,41 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
         padding: 0;
         background: transparent;
         width: 1fr;
+        height: auto;
     }
 
     .directory-row {
         width: 1fr;
-        padding: 0 1;
-        color: %(text_muted)s;
+        height: auto;
+        padding: 0 1 0 2;
+        background: transparent;
     }
 
     .directory-row.-selected {
         background: %(row_selection_bg)s;
-        color: %(text_high)s;
+        border-left: outer %(accent_github)s;
+        padding: 0 1 0 1;
+    }
+
+    .directory-name {
+        color: %(text_muted)s;
+        text-style: bold;
+        padding: 0;
+        height: auto;
+    }
+
+    .directory-parent {
+        color: %(text_subtle)s;
+        padding: 0;
+        height: auto;
+    }
+
+    .directory-row.-selected .directory-name {
+        color: %(text_primary)s;
+    }
+
+    .directory-row.-selected .directory-parent {
+        color: %(text_subtle)s;
     }
 
     Button.add-action-btn {
@@ -190,6 +214,7 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
         color: %(text_subtle)s;
     }
     """ % {
+        "accent_github": "#4493F8",
         "accent_soft": theme.ACCENT_SOFT,
         "border": theme.BORDER,
         "border_focus": theme.BORDER_FOCUS,
@@ -207,12 +232,8 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
 
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
-        Binding("tab", "tab_next", "Next Match", show=False, priority=True),
-        Binding("shift+tab", "tab_prev", "Prev Match", show=False, priority=True),
-        Binding("down", "next_match", show=False, priority=True),
-        Binding("up", "prev_match", show=False, priority=True),
-        Binding("ctrl+j", "next_match", show=False),
-        Binding("ctrl+k", "prev_match", show=False),
+        Binding("tab", "tab_next", show=False, priority=True),
+        Binding("shift+tab", "tab_prev", show=False, priority=True),
     ]
 
     def __init__(self, cwd: str) -> None:
@@ -356,16 +377,52 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
             self._set_selected_suggestion(None)
 
     def action_tab_next(self) -> None:
-        if self.focused is self.query_one("#modal-alias", Input):
-            self.query_one("#modal-path", Input).focus()
+        alias_input = self.query_one("#modal-alias", Input)
+        path_input = self.query_one("#modal-path", Input)
+        matches_list = self.query_one("#matches-list", ListView)
+        cancel_button = self.query_one("#add-cancel-btn", Button)
+        create_button = self.query_one("#add-create-btn", Button)
+
+        if self.focused is alias_input:
+            path_input.focus()
             return
-        self.action_next_match()
+        if self.focused is path_input:
+            if self._suggestion_paths:
+                matches_list.focus()
+            else:
+                cancel_button.focus()
+            return
+        if self.focused is matches_list:
+            cancel_button.focus()
+            return
+        if self.focused is cancel_button and not create_button.disabled:
+            create_button.focus()
+            return
+        alias_input.focus()
 
     def action_tab_prev(self) -> None:
-        if self.focused is self.query_one("#modal-path", Input):
-            self.query_one("#modal-alias", Input).focus()
+        alias_input = self.query_one("#modal-alias", Input)
+        path_input = self.query_one("#modal-path", Input)
+        matches_list = self.query_one("#matches-list", ListView)
+        cancel_button = self.query_one("#add-cancel-btn", Button)
+        create_button = self.query_one("#add-create-btn", Button)
+
+        if self.focused is path_input:
+            alias_input.focus()
             return
-        self.action_prev_match()
+        if self.focused is matches_list:
+            path_input.focus()
+            return
+        if self.focused is create_button:
+            cancel_button.focus()
+            return
+        if self.focused is cancel_button:
+            if self._suggestion_paths:
+                matches_list.focus()
+            else:
+                path_input.focus()
+            return
+        alias_input.focus()
 
     def action_next_match(self) -> None:
         if not self._suggestion_paths:
