@@ -22,19 +22,19 @@ except ImportError:
 class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
     CSS = """
     AddWorkspaceModal {
-        align: center middle;
+        align: center top;
         background: %(overlay_bg)s;
+        padding: 1 0 0 0;
     }
 
     #add-modal {
         width: 76;
         min-width: 54;
         max-width: 92%%;
-        max-height: 30;
-        height: auto;
+        height: 31;
         background: %(modal_bg)s;
         border: round %(border)s;
-        padding: 0 1;
+        padding: 0 1 1 1;
         overflow: hidden hidden;
     }
 
@@ -59,10 +59,9 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
     }
 
     #add-body {
-        padding: 1 2;
-        height: auto;
-        max-height: 22;
-        overflow-y: auto;
+        padding: 1 1 0 1;
+        height: 1fr;
+        overflow-y: hidden;
     }
 
     #add-footer {
@@ -76,22 +75,16 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
         width: 1fr;
     }
 
-    .add-label {
-        color: %(text_muted)s;
-        height: 1;
-        margin: 1 0 0 0;
-    }
-
     .add-field-row {
         height: auto;
         align: left top;
     }
 
     .add-input-label {
-        width: 16;
-        min-width: 16;
+        width: 10;
+        min-width: 10;
         color: %(text_muted)s;
-        padding: 1 1 0 0;
+        padding: 1 0 0 0;
     }
 
     .add-input {
@@ -120,7 +113,7 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
         width: 1fr;
         min-width: 0;
         height: auto;
-        margin: 0 0 1 0;
+        margin: 0;
         border: round %(border_subtle)s;
         background: %(panel_bg)s;
         padding: 0 1;
@@ -132,10 +125,14 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
     }
 
     #matches-list {
-        height: 4;
+        height: 6;
         padding: 0;
         border: none;
         background: transparent;
+    }
+
+    #modal-path {
+        margin: 0;
     }
 
     ListView > ListItem {
@@ -230,7 +227,6 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
                 yield Static("Add Project", id="add-title")
                 yield Static("esc", id="add-close-hint")
             with Vertical(id="add-body"):
-                yield Static("Project details", classes="add-label")
                 with Horizontal(classes="add-field-row"):
                     yield Static("Project name", classes="add-input-label")
                     yield Input(placeholder="Alias", id="modal-alias", classes="add-input")
@@ -431,8 +427,9 @@ class AddWorktreeModal(ModalScreen[Optional[Tuple[str, str]]]):
 
     CSS = """
     AddWorktreeModal {
-        align: center middle;
+        align: center top;
         background: %(overlay_bg)s;
+        padding: 1 0 0 0;
     }
 
     #worktree-modal {
