@@ -63,7 +63,7 @@ class ProjectsApp(App):
         self._workspaces: list[WorkspaceInfo] = []
         self._filtered_workspaces: list[WorkspaceInfo] = []
         self._items: list[ListItem] = []
-        self._pending_delete_alias: str | None = None
+        self._pending_delete_target: str | None = None
         self._mode = "projects"
         self._active_project_alias: str | None = None
 
@@ -280,7 +280,7 @@ class ProjectsApp(App):
             self._set_status("")
 
     def _clear_delete_confirmation(self) -> None:
-        self._pending_delete_alias = None
+        self._pending_delete_target = None
 
     def _after_add_modal(self, result: Optional[Tuple[str, str]]) -> None:
         self.query_one("#projects-list", ListView).focus()
@@ -306,8 +306,8 @@ class ProjectsApp(App):
         self._submit_add_worktree(project.alias, workspace_name, branch_name)
 
     def action_close_or_cancel(self) -> None:
-        if self._pending_delete_alias is not None:
-            self._pending_delete_alias = None
+        if self._pending_delete_target is not None:
+            self._pending_delete_target = None
             self._set_status("Delete canceled.")
             return
 
@@ -464,8 +464,31 @@ class ProjectsApp(App):
         self.exit()
 
     def action_delete_selected(self) -> None:
-        if self._mode != "projects":
-            self._set_status("Workspace removal is available through the CLI for now.")
+        if self._mode == "workspaces":
+            project = self._active_project()
+            workspace = self._selected_workspace()
+            if project is None or workspace is None:
+                self._set_status("No workspace selected.")
+                return
+
+            pending_target = f"workspace:{project.alias}/{workspace.name}"
+            if self._pending_delete_target != pending_target:
+                self._pending_delete_target = pending_target
+                self._set_status(f'Press `d` again to delete workspace "{workspace.name}".')
+                return
+
+            result = self._run_cli(["workspace", "remove", project.alias, workspace.name])
+            self._pending_delete_target = None
+            if result is None:
+                return
+            if result.returncode != 0:
+                self._set_status(result.stderr.strip() or result.stdout.strip() or "Could not remove workspace.")
+                return
+
+            self._refresh_projects()
+            self._sync_list(clear_status=True)
+            self.query_one("#projects-list", ListView).focus()
+            self._set_status(result.stdout.strip() or f'Removed workspace "{workspace.name}".')
             return
 
         project = self._selected_project()
@@ -473,13 +496,14 @@ class ProjectsApp(App):
             self._set_status("No project selected.")
             return
 
-        if self._pending_delete_alias != project.alias:
-            self._pending_delete_alias = project.alias
+        pending_target = f"project:{project.alias}"
+        if self._pending_delete_target != pending_target:
+            self._pending_delete_target = pending_target
             self._set_status(f'Press `d` again to delete "{project.alias}".')
             return
 
         result = self._run_cli(["project", "remove", project.alias])
-        self._pending_delete_alias = None
+        self._pending_delete_target = None
         if result is None:
             return
         if result.returncode != 0:

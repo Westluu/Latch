@@ -1073,6 +1073,71 @@ test("python projects app open action invokes workspace open when viewing worksp
   );
 });
 
+test("python projects app delete action invokes workspace remove when viewing workspaces", () => {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import json",
+        "import sys",
+        "from types import MethodType, SimpleNamespace",
+        "sys.path.insert(0, 'python')",
+        "import ui.projects as projects",
+        "app = projects.ProjectsApp('/tmp')",
+        "calls = {'args': []}",
+        "class FocusTarget:",
+        "    def focus(self):",
+        "        calls['focused'] = True",
+        "class StatusTarget:",
+        "    def update(self, message):",
+        "        calls['status'] = message",
+        "def run_cli(self, args):",
+        "    calls['args'].append(args)",
+        "    return SimpleNamespace(returncode=0, stdout='', stderr='')",
+        "def query_one(self, selector, *_args, **_kwargs):",
+        "    if selector == '#projects-list':",
+        "        return FocusTarget()",
+        "    if selector == '#status':",
+        "        return StatusTarget()",
+        "    raise AssertionError(selector)",
+        "workspace = projects.WorkspaceInfo('feature-one', '/tmp/frontend/.latch/workspaces/feature-one', 'worktree', 'feature-one', False, None)",
+        "project = projects.ProjectInfo('frontend', '/tmp/frontend', '/tmp/frontend', '', '', None, 'root', [workspace])",
+        "app._mode = 'workspaces'",
+        "app._projects = [project]",
+        "app._workspaces = [workspace]",
+        "app._active_project_alias = 'frontend'",
+        "app._selected_workspace = MethodType(lambda self: workspace, app)",
+        "app._active_project = MethodType(lambda self: project, app)",
+        "app._run_cli = MethodType(run_cli, app)",
+        "app._refresh_projects = MethodType(lambda self: calls.__setitem__('refreshed', True), app)",
+        "app._sync_list = MethodType(lambda self, **kwargs: calls.__setitem__('synced', kwargs), app)",
+        "app.query_one = MethodType(query_one, app)",
+        "app.action_delete_selected()",
+        "first_status = calls.get('status')",
+        "app.action_delete_selected()",
+        "print(json.dumps({'first_status': first_status, 'args': calls['args'], 'focused': calls.get('focused', False), 'refreshed': calls.get('refreshed', False), 'synced': calls.get('synced')}, sort_keys=True))",
+      ].join("\n"),
+    ],
+    {
+      cwd: realpathSync(process.cwd()),
+      encoding: "utf-8",
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(
+    JSON.parse(result.stdout.trim()),
+    {
+      args: [["workspace", "remove", "frontend", "feature-one"]],
+      first_status: 'Press `d` again to delete workspace "feature-one".',
+      focused: true,
+      refreshed: true,
+      synced: { clear_status: true },
+    }
+  );
+});
+
 test("cli built-in commands win over project shorthand lookup", () => {
   withTempDir((dir) => {
     const configPath = configPathFor(dir);
