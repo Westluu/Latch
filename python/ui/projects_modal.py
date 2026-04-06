@@ -577,11 +577,6 @@ class AddWorktreeModal(ModalScreen[Optional[Tuple[str, str]]]):
         content-align: left middle;
     }
 
-    #wt-branch-input {
-        width: 1fr;
-        margin: 0 0 1 0;
-    }
-
     #wt-branch-select {
         width: 1fr;
         height: auto;
@@ -737,13 +732,6 @@ class AddWorktreeModal(ModalScreen[Optional[Tuple[str, str]]]):
                 yield Static("Path", classes="wt-label")
                 yield Static(self._preview_path(""), id="wt-path-display")
                 yield Static("Base branch", classes="wt-label")
-                yield Input(
-                    value=self._branch_name,
-                    placeholder="e.g. main or feature/login",
-                    id="wt-branch-input",
-                    classes="wt-input",
-                )
-                yield Static("Local branches", classes="wt-label")
                 if self._branch_suggestions:
                     yield Select(
                         self._branch_options(),
@@ -770,29 +758,26 @@ class AddWorktreeModal(ModalScreen[Optional[Tuple[str, str]]]):
 
     def _refresh_create_button(self) -> None:
         name = self.query_one("#wt-name-input", Input).value.strip()
-        branch_name = self.query_one("#wt-branch-input", Input).value.strip()
-        self.query_one("#wt-create-btn", Button).disabled = not bool(name and branch_name)
+        self.query_one("#wt-create-btn", Button).disabled = not bool(name and self._branch_name)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "wt-name-input":
             self._refresh_path()
             self._refresh_create_button()
             return
-        if event.input.id == "wt-branch-input":
-            self._branch_name = event.input.value.strip()
-            self._refresh_create_button()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id not in {"wt-name-input", "wt-branch-input"}:
+        if event.input.id != "wt-name-input":
+            return
+        if self._branch_suggestions:
+            self.query_one("#wt-branch-select", Select).focus()
             return
         self.action_create()
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id != "wt-branch-select":
             return
-        branch_name = str(event.value)
-        self._branch_name = branch_name
-        self.query_one("#wt-branch-input", Input).value = branch_name
+        self._branch_name = str(event.value)
         self._refresh_create_button()
 
     def on_key(self, event: events.Key) -> None:
@@ -804,17 +789,11 @@ class AddWorktreeModal(ModalScreen[Optional[Tuple[str, str]]]):
             return
 
         name_input = self.query_one("#wt-name-input", Input)
-        branch_input = self.query_one("#wt-branch-input", Input)
         branch_select = self.query_one("#wt-branch-select", Select) if self._branch_suggestions else None
         cancel_button = self.query_one("#wt-cancel-btn", Button)
         create_button = self.query_one("#wt-create-btn", Button)
 
         if focused is name_input and event.key == "down":
-            branch_input.focus()
-            event.stop()
-            return
-
-        if focused is branch_input and event.key == "down":
             if branch_select is not None:
                 branch_select.focus()
             else:
@@ -831,7 +810,7 @@ class AddWorktreeModal(ModalScreen[Optional[Tuple[str, str]]]):
             if branch_select is not None:
                 branch_select.focus()
             else:
-                branch_input.focus()
+                name_input.focus()
             event.stop()
 
     def _footer_buttons(self) -> tuple[Button, Button]:
@@ -862,7 +841,7 @@ class AddWorktreeModal(ModalScreen[Optional[Tuple[str, str]]]):
 
     def action_create(self) -> None:
         name = self.query_one("#wt-name-input", Input).value.strip()
-        branch_name = self.query_one("#wt-branch-input", Input).value.strip()
+        branch_name = self._branch_name.strip()
         if not name or not branch_name:
             return
         self.dismiss((self._slug(name), branch_name))

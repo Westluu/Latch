@@ -26,7 +26,7 @@ from latch.projects_store import ProjectInfo, load_projects, list_local_branches
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Footer, Header, Input, Static
+from textual.widgets import Button, Footer, Header, Input, Select, Static
 
 
 CSS = """
@@ -85,21 +85,39 @@ Screen {
     content-align: left middle;
 }
 
-#wt-branch-row {
-    height: 3;
-    margin: 0;
+#wt-branch-select {
+    width: 1fr;
+    height: auto;
+    margin: 0 0 1 0;
 }
 
-.wt-source-btn {
-    height: 3;
+#wt-branch-select > SelectCurrent {
     border: round %(border)s;
     background: %(surface_bg)s;
-    color: %(text_muted)s;
-    margin: 0 1 0 0;
+    color: %(text_high)s;
+    padding: 0 1;
 }
 
-.wt-source-btn.-active {
+#wt-branch-select:focus > SelectCurrent,
+#wt-branch-select.-expanded > SelectCurrent {
     border: round %(border_focus)s;
+}
+
+#wt-branch-select > SelectOverlay {
+    width: 1fr;
+    max-height: 8;
+    border: round %(border_subtle)s;
+    background: %(surface_bg)s;
+    color: %(text_high)s;
+}
+
+#wt-branch-select .option-list--option {
+    padding: 0 1;
+    color: %(text_muted)s;
+}
+
+#wt-branch-select .option-list--option-highlighted,
+#wt-branch-select .option-list--option-hover {
     color: %(text_high)s;
 }
 
@@ -188,11 +206,15 @@ class AddWorktreeApp(App):
                 yield Static("Path", classes="wt-label")
                 yield Static(self._preview_path(""), id="wt-path-display")
                 yield Static("Base branch", classes="wt-label")
-                yield Input(value=self._branch_name, placeholder="e.g. main", id="wt-branch-input", classes="wt-input")
-                yield Static("Local branches", classes="wt-label")
-                with Horizontal(id="wt-branch-row"):
-                    for index, branch_name in enumerate(self._branch_suggestions):
-                        yield Button(branch_name, id=f"wt-branch-{index}", classes="wt-source-btn")
+                if self._branch_suggestions:
+                    yield Select(
+                        [(branch_name, branch_name) for branch_name in self._branch_suggestions],
+                        value=self._branch_name,
+                        allow_blank=False,
+                        id="wt-branch-select",
+                    )
+                else:
+                    yield Static("No local branches found.", id="wt-branch-empty")
             with Horizontal(id="wt-actions-row"):
                 yield Button("esc  Cancel", id="wt-cancel-btn")
                 yield Button("enter  Create", id="wt-create-btn", disabled=True)
@@ -205,43 +227,34 @@ class AddWorktreeApp(App):
 
     def on_mount(self) -> None:
         self._resize_panel()
-        self._refresh_branch_buttons()
-        self.query_one("#wt-create-btn", Button).disabled = not bool(
-            self.query_one("#wt-name-input", Input).value.strip() and self._branch_name
-        )
+        if self._branch_suggestions:
+            self.query_one("#wt-branch-select", Select).value = self._branch_name
+        self.query_one("#wt-create-btn", Button).disabled = not bool(self._branch_name)
         self.query_one("#wt-name-input", Input).focus()
 
     def on_resize(self) -> None:
         self._resize_panel()
 
-    def _refresh_branch_buttons(self) -> None:
-        for index, branch_name in enumerate(self._branch_suggestions):
-            btn = self.query_one(f"#wt-branch-{index}", Button)
-            active = branch_name == self._branch_name
-            btn.set_class(active, "-active")
-            btn.label = f"● {branch_name}" if active else branch_name
-
     def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "wt-name-input":
-            name = event.value
-            self.query_one("#wt-path-display", Static).update(self._preview_path(name))
-        elif event.input.id == "wt-branch-input":
-            self._branch_name = event.value.strip()
-            self._refresh_branch_buttons()
-        else:
+        if event.input.id != "wt-name-input":
             return
+        name = event.value
+        self.query_one("#wt-path-display", Static).update(self._preview_path(name))
         self.query_one("#wt-create-btn", Button).disabled = not bool(
-            self.query_one("#wt-name-input", Input).value.strip() and self.query_one("#wt-branch-input", Input).value.strip()
+            self.query_one("#wt-name-input", Input).value.strip() and self._branch_name
+        )
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id != "wt-branch-select":
+            return
+        self._branch_name = str(event.value)
+        self.query_one("#wt-create-btn", Button).disabled = not bool(
+            self.query_one("#wt-name-input", Input).value.strip() and self._branch_name
         )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id or ""
-        if btn_id.startswith("wt-branch-"):
-            index = int(btn_id[len("wt-branch-"):])
-            self._branch_name = self._branch_suggestions[index]
-            self.query_one("#wt-branch-input", Input).value = self._branch_name
-            self._refresh_branch_buttons()
-        elif btn_id == "wt-cancel-btn":
+        if btn_id == "wt-cancel-btn":
             self.action_cancel()
         elif btn_id == "wt-create-btn":
             self.action_create()
@@ -251,7 +264,7 @@ class AddWorktreeApp(App):
 
     def action_create(self) -> None:
         name = self.query_one("#wt-name-input", Input).value.strip()
-        branch_name = self.query_one("#wt-branch-input", Input).value.strip()
+        branch_name = self._branch_name.strip()
         if not name or not branch_name:
             return
         slug = self._slug(name)
