@@ -136,9 +136,21 @@ function maybeGitRepoRoot(cwd: string): string | null {
   return tryRunGit(cwd, ["rev-parse", "--show-toplevel"]);
 }
 
+function liveGitBranch(cwd: string): { available: boolean; branch: string | null } {
+  const result = spawnSync("git", ["-C", cwd, "branch", "--show-current"], {
+    encoding: "utf-8",
+  });
+
+  if (result.error || result.status !== 0) {
+    return { available: false, branch: null };
+  }
+
+  const branch = result.stdout.trim();
+  return { available: true, branch: branch.length > 0 ? branch : null };
+}
+
 function currentGitBranch(cwd: string): string | null {
-  const branch = tryRunGit(cwd, ["branch", "--show-current"]);
-  return branch && branch.length > 0 ? branch : null;
+  return liveGitBranch(cwd).branch;
 }
 
 function gitBranchExists(cwd: string, branch: string): boolean {
@@ -288,10 +300,11 @@ function validateWorkspaceShape(
   }
 
   const workspacePath = entry.path;
-  const branch =
+  const storedBranch =
     typeof entry.branch === "string" || entry.branch === null
       ? entry.branch
-      : currentGitBranch(workspacePath);
+      : null;
+  const liveBranch = liveGitBranch(workspacePath);
   const lastOpenedAt =
     typeof entry.lastOpenedAt === "string" || entry.lastOpenedAt === null
       ? entry.lastOpenedAt
@@ -299,7 +312,7 @@ function validateWorkspaceShape(
 
   return {
     path: workspacePath,
-    branch,
+    branch: liveBranch.available ? liveBranch.branch : storedBranch,
     kind: entry.kind,
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,

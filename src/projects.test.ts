@@ -203,6 +203,39 @@ test("readProjectsRegistry accepts v2 workspaces without explicit branch or work
   });
 });
 
+test("readProjectsRegistry prefers a worktree's live branch over stale stored metadata", () => {
+  withTempDir((dir) => {
+    const repoPath = join(dir, "repo");
+    const configPath = configPathFor(dir);
+    initGitRepo(repoPath);
+
+    addProject("repo", repoPath, { configPath });
+    createWorktreeWorkspace("repo", "feature-one", { configPath });
+
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+    config.projects.repo.workspaces["feature-one"].branch = "stale-branch";
+    writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+
+    const registry = readProjectsRegistry(configPath);
+    assert.equal(registry.projects.repo.workspaces["feature-one"].branch, "feature-one");
+  });
+});
+
+test("readProjectsRegistry refreshes the root workspace branch after switching branches", () => {
+  withTempDir((dir) => {
+    const repoPath = join(dir, "repo");
+    const configPath = configPathFor(dir);
+    initGitRepo(repoPath);
+
+    addProject("repo", repoPath, { configPath });
+    runGit(["checkout", "-b", "feature-root"], repoPath);
+
+    const project = getProject("repo", configPath);
+    assert.ok(project);
+    assert.equal(project.workspaces.default.branch, "feature-root");
+  });
+});
+
 test("readProjectsRegistry fails clearly for invalid JSON", () => {
   withTempDir((dir) => {
     const configPath = configPathFor(dir);
@@ -792,6 +825,44 @@ test("python load_projects reads v2 projects with multiple workspaces", () => {
   });
 });
 
+test("python load_projects prefers live git branch state over stored branch metadata", () => {
+  withTempDir((dir) => {
+    const configPath = configPathFor(dir);
+    const repoPath = join(dir, "repo");
+    initGitRepo(repoPath);
+    addProject("repo", repoPath, { configPath });
+    runGit(["checkout", "-b", "feature-root"], repoPath);
+
+    const result = spawnSync(
+      "python3",
+      [
+        "-c",
+        [
+          "import json",
+          "import os",
+          "import sys",
+          `os.environ['XDG_CONFIG_HOME'] = ${JSON.stringify(dir)}`,
+          "sys.path.insert(0, 'python')",
+          "from latch.projects_store import load_projects",
+          "items = load_projects()",
+          "default_branch = next(workspace.branch for workspace in items[0].workspaces if workspace.is_default)",
+          "print(json.dumps({'alias': items[0].alias, 'branch': default_branch}, sort_keys=True))",
+        ].join("\n"),
+      ],
+      {
+        cwd: realpathSync(process.cwd()),
+        encoding: "utf-8",
+      }
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout.trim()), {
+      alias: "repo",
+      branch: "feature-root",
+    });
+  });
+});
+
 test("python load_projects skips malformed project entries instead of failing the whole list", () => {
   withTempDir((dir) => {
     const configPath = configPathFor(dir);
@@ -858,6 +929,104 @@ test("python load_projects skips malformed project entries instead of failing th
       aliases: ["frontend"],
       count: 1,
     });
+  });
+});
+
+test("python projects app passes the selected branch directly when creating a workspace", () => {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import json",
+        "import sys",
+        "from types import MethodType, SimpleNamespace",
+        "sys.path.insert(0, 'python')",
+        "import ui.projects as projects",
+        "class FocusTarget:",
+        "    def focus(self):",
+        "        pass",
+        "class StatusTarget:",
+        "    def update(self, message):",
+        "        pass",
+        "app = projects.ProjectsApp('/tmp')",
+        "calls = {}",
+        "def run_cli(self, args):",
+        "    calls['args'] = args",
+        "    return SimpleNamespace(returncode=0, stdout='', stderr='')",
+        "def query_one(self, selector, *_args, **_kwargs):",
+        "    if selector == '#projects-list':",
+        "        return FocusTarget()",
+        "    if selector == '#status':",
+        "        return StatusTarget()",
+        "    raise AssertionError(selector)",
+        "app._run_cli = MethodType(run_cli, app)",
+        "app._refresh_projects = MethodType(lambda self: None, app)",
+        "app._sync_list = MethodType(lambda self, **kwargs: None, app)",
+        "app.query_one = MethodType(query_one, app)",
+        "app._submit_add_worktree('frontend', 'feature-two', 'release/1.0')",
+        "print(json.dumps(calls, sort_keys=True))",
+      ].join("\n"),
+    ],
+    {
+      cwd: realpathSync(process.cwd()),
+      encoding: "utf-8",
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(
+    JSON.parse(result.stdout.trim()),
+    { args: ["workspace", "create", "frontend", "feature-two", "release/1.0"] }
+  );
+});
+
+test("python add worktree modal loads local branch suggestions and defaults to the current branch", () => {
+  withTempDir((dir) => {
+    const repoPath = join(dir, "repo");
+    initGitRepo(repoPath);
+    runGit(["checkout", "-b", "feature-root"], repoPath);
+    runGit(["branch", "release/1.0"], repoPath);
+
+    const result = spawnSync(
+      "python3",
+      [
+        "-c",
+        [
+          "import json",
+          "import sys",
+          "sys.path.insert(0, 'python')",
+          "from latch.projects_store import ProjectInfo, WorkspaceInfo",
+          "from ui.projects_modal import AddWorktreeModal",
+          `repo_path = ${JSON.stringify(repoPath)}`,
+          "project = ProjectInfo(",
+          "    'repo',",
+          "    repo_path,",
+          "    repo_path,",
+          "    '',",
+          "    '',",
+          "    None,",
+          "    'default',",
+          "    [WorkspaceInfo('default', repo_path, 'root', 'feature-root', True, None)],",
+          ")",
+          "modal = AddWorktreeModal(project)",
+          "print(json.dumps({'branch': modal._branch_name, 'suggestions': modal._branch_suggestions}, sort_keys=True))",
+        ].join("\n"),
+      ],
+      {
+        cwd: realpathSync(process.cwd()),
+        encoding: "utf-8",
+      }
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout.trim()) as {
+      branch: string;
+      suggestions: string[];
+    };
+    assert.equal(parsed.branch, "feature-root");
+    assert.equal(parsed.suggestions[0], "feature-root");
+    assert.ok(parsed.suggestions.includes("release/1.0"));
   });
 });
 

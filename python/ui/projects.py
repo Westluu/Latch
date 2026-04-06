@@ -302,8 +302,8 @@ class ProjectsApp(App):
             self._set_status("Could not determine the active project.")
             return
 
-        workspace_name, copy_from = result
-        self._submit_add_worktree(project.alias, workspace_name, copy_from)
+        workspace_name, branch_name = result
+        self._submit_add_worktree(project.alias, workspace_name, branch_name)
 
     def action_close_or_cancel(self) -> None:
         if self._pending_delete_alias is not None:
@@ -413,16 +413,15 @@ class ProjectsApp(App):
         self.query_one("#projects-list", ListView).focus()
         self._set_status(result.stdout.strip() or f'Saved project "{alias}".')
 
-    def _submit_add_worktree(self, project_alias: str, workspace_name: str, copy_from: str) -> None:
+    def _submit_add_worktree(self, project_alias: str, workspace_name: str, branch_name: str) -> None:
         if not workspace_name:
             self._set_status("Workspace name is required.")
             return
 
-        branch = copy_from
-        for workspace in self._workspaces:
-            if workspace.name == copy_from:
-                branch = workspace.branch or workspace.name
-                break
+        branch = branch_name.strip()
+        if not branch:
+            self._set_status("Base branch is required.")
+            return
 
         args = ["workspace", "create", project_alias, workspace_name, branch]
 
