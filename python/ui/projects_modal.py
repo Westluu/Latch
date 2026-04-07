@@ -5,7 +5,7 @@ import re
 from typing import Optional, Tuple
 
 from latch import theme
-from latch.projects_store import ProjectInfo
+from latch.projects_store import ProjectInfo, list_local_branches
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -488,8 +488,7 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
 class AddWorktreeModal(ModalScreen[Optional[Tuple[str, str]]]):
     """Modal for adding a new workspace/worktree to an existing project.
 
-    Dismisses with (workspace_name, copy_from) where copy_from is the
-    workspace name to base the new workspace on, or None if cancelled.
+    Dismisses with (workspace_name, branch_name), or None if cancelled.
     """
 
     CSS = """
@@ -564,25 +563,25 @@ class AddWorktreeModal(ModalScreen[Optional[Tuple[str, str]]]):
         content-align: left middle;
     }
 
-    #wt-copy-select {
+    #wt-branch-select {
         width: 1fr;
         height: auto;
         margin: 0 0 1 0;
     }
 
-    #wt-copy-select > SelectCurrent {
+    #wt-branch-select > SelectCurrent {
         border: round %(border)s;
         background: %(panel_bg)s;
         color: %(text_primary)s;
         padding: 0 1;
     }
 
-    #wt-copy-select:focus > SelectCurrent,
-    #wt-copy-select.-expanded > SelectCurrent {
+    #wt-branch-select:focus > SelectCurrent,
+    #wt-branch-select.-expanded > SelectCurrent {
         border: round %(border_focus)s;
     }
 
-    #wt-copy-select > SelectOverlay {
+    #wt-branch-select > SelectOverlay {
         width: 1fr;
         max-height: 8;
         border: round %(border_subtle)s;
@@ -590,15 +589,25 @@ class AddWorktreeModal(ModalScreen[Optional[Tuple[str, str]]]):
         color: %(text_primary)s;
     }
 
-    #wt-copy-select .option-list--option {
+    #wt-branch-select .option-list--option {
         padding: 0 1;
         color: %(text_muted)s;
     }
 
-    #wt-copy-select .option-list--option-highlighted,
-    #wt-copy-select .option-list--option-hover {
+    #wt-branch-select .option-list--option-highlighted,
+    #wt-branch-select .option-list--option-hover {
         background: %(row_selection_bg)s;
         color: %(text_high)s;
+    }
+
+    #wt-branch-empty {
+        height: 3;
+        border: round %(border_subtle)s;
+        background: %(panel_bg)s;
+        color: %(text_subtle)s;
+        padding: 0 1;
+        margin: 0 0 1 0;
+        content-align: left middle;
     }
 
     #wt-footer {
@@ -680,12 +689,16 @@ class AddWorktreeModal(ModalScreen[Optional[Tuple[str, str]]]):
     def __init__(self, project: ProjectInfo) -> None:
         super().__init__()
         self.project = project
-        self._workspace_names: list[str] = [w.name for w in project.workspaces]
-        preferred_workspace = project.default_workspace if project.default_workspace in self._workspace_names else None
-        self._copy_from: str = preferred_workspace or self._workspace_names[0]
+        default_branch = next((workspace.branch for workspace in project.workspaces if workspace.is_default and workspace.branch), None)
+        self._branch_suggestions = list_local_branches(project.root_path)
+        if default_branch and default_branch in self._branch_suggestions:
+            self._branch_suggestions = [default_branch] + [
+                branch for branch in self._branch_suggestions if branch != default_branch
+            ]
+        self._branch_name = default_branch or (self._branch_suggestions[0] if self._branch_suggestions else "")
 
-    def _copy_from_options(self) -> list[tuple[str, str]]:
-        return [(name, name) for name in self._workspace_names]
+    def _branch_options(self) -> list[tuple[str, str]]:
+        return [(branch, branch) for branch in self._branch_suggestions]
 
     def _slug(self, name: str) -> str:
         return re.sub(r"[^a-z0-9-]", "-", name.lower().strip()).strip("-")
@@ -704,20 +717,25 @@ class AddWorktreeModal(ModalScreen[Optional[Tuple[str, str]]]):
                 yield Input(placeholder="e.g. feature-branch", id="wt-name-input", classes="wt-input")
                 yield Static("Path", classes="wt-label")
                 yield Static(self._preview_path(""), id="wt-path-display")
-                yield Static("Base workspace", classes="wt-label")
-                yield Select(
-                    self._copy_from_options(),
-                    value=self._copy_from,
-                    allow_blank=False,
-                    id="wt-copy-select",
-                )
+                yield Static("Base branch", classes="wt-label")
+                if self._branch_suggestions:
+                    yield Select(
+                        self._branch_options(),
+                        value=self._branch_name,
+                        allow_blank=False,
+                        id="wt-branch-select",
+                    )
+                else:
+                    yield Static("No local branches found. Type a branch name above.", id="wt-branch-empty")
             with Horizontal(id="wt-footer"):
                 yield Static("", id="wt-footer-spacer")
                 yield Button("esc  Cancel", id="wt-cancel-btn", classes="wt-action-btn")
                 yield Button("enter  Create", id="wt-create-btn", classes="wt-action-btn", disabled=True)
 
     def on_mount(self) -> None:
-        self.query_one("#wt-copy-select", Select).value = self._copy_from
+        if self._branch_suggestions:
+            self.query_one("#wt-branch-select", Select).value = self._branch_name
+        self._refresh_create_button()
         self.query_one("#wt-name-input", Input).focus()
 
     def _refresh_path(self) -> None:
@@ -726,22 +744,27 @@ class AddWorktreeModal(ModalScreen[Optional[Tuple[str, str]]]):
 
     def _refresh_create_button(self) -> None:
         name = self.query_one("#wt-name-input", Input).value.strip()
-        self.query_one("#wt-create-btn", Button).disabled = not bool(name)
+        self.query_one("#wt-create-btn", Button).disabled = not bool(name and self._branch_name)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "wt-name-input":
             self._refresh_path()
             self._refresh_create_button()
+            return
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id != "wt-name-input":
             return
+        if self._branch_suggestions:
+            self.query_one("#wt-branch-select", Select).focus()
+            return
         self.action_create()
 
     def on_select_changed(self, event: Select.Changed) -> None:
-        if event.select.id != "wt-copy-select":
+        if event.select.id != "wt-branch-select":
             return
-        self._copy_from = str(event.value)
+        self._branch_name = str(event.value)
+        self._refresh_create_button()
 
     def on_key(self, event: events.Key) -> None:
         if event.key not in {"up", "down"}:
@@ -752,17 +775,28 @@ class AddWorktreeModal(ModalScreen[Optional[Tuple[str, str]]]):
             return
 
         name_input = self.query_one("#wt-name-input", Input)
-        copy_select = self.query_one("#wt-copy-select", Select)
+        branch_select = self.query_one("#wt-branch-select", Select) if self._branch_suggestions else None
         cancel_button = self.query_one("#wt-cancel-btn", Button)
         create_button = self.query_one("#wt-create-btn", Button)
 
         if focused is name_input and event.key == "down":
-            copy_select.focus()
+            if branch_select is not None:
+                branch_select.focus()
+            else:
+                cancel_button.focus()
+            event.stop()
+            return
+
+        if branch_select is not None and focused is branch_select and event.key == "down":
+            cancel_button.focus()
             event.stop()
             return
 
         if focused in {cancel_button, create_button} and event.key == "up":
-            copy_select.focus()
+            if branch_select is not None:
+                branch_select.focus()
+            else:
+                name_input.focus()
             event.stop()
 
     def _footer_buttons(self) -> tuple[Button, Button]:
@@ -793,6 +827,7 @@ class AddWorktreeModal(ModalScreen[Optional[Tuple[str, str]]]):
 
     def action_create(self) -> None:
         name = self.query_one("#wt-name-input", Input).value.strip()
-        if not name:
+        branch_name = self._branch_name.strip()
+        if not name or not branch_name:
             return
-        self.dismiss((self._slug(name), self._copy_from))
+        self.dismiss((self._slug(name), branch_name))

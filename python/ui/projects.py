@@ -25,7 +25,7 @@ from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
-from textual.widgets import Footer, Header, Input, ListItem, ListView, Rule, Static
+from textual.widgets import Footer, Input, ListItem, ListView, Static
 
 try:
     from .projects_modal import AddWorkspaceModal, AddWorktreeModal
@@ -63,13 +63,17 @@ class ProjectsApp(App):
         self._workspaces: list[WorkspaceInfo] = []
         self._filtered_workspaces: list[WorkspaceInfo] = []
         self._items: list[ListItem] = []
-        self._pending_delete_alias: str | None = None
+        self._pending_delete_target: str | None = None
         self._mode = "projects"
         self._active_project_alias: str | None = None
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=False)
-        yield Rule(id="header-rule")
+        with Horizontal(id="projects-topbar"):
+            yield Static("", id="projects-left")
+            yield Static("", id="projects-center")
+            with Horizontal(id="projects-right"):
+                yield Static("●", id="projects-brand-dot")
+                yield Static("LATCH", id="projects-brand-text")
         with Horizontal(id="search-bar"):
             yield Static("○", id="search-icon")
             yield Input(placeholder="Search projects…", id="search-input")
@@ -79,20 +83,30 @@ class ProjectsApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.title = "LATCH / WORKSPACES"
-        self._update_subtitle()
+        self.title = "LATCH"
+        self._update_header()
         self._refresh_projects()
         if self._projects:
             self.query_one("#projects-list", ListView).focus()
         else:
             self.query_one("#search-input", Input).focus()
 
-    def _update_subtitle(self) -> None:
+    def _header_texts(self) -> tuple[str, str, str]:
         if self._mode == "workspaces":
-            alias = self._active_project_alias or "Project"
-            self.sub_title = f"{alias} / Workspaces"
-        else:
-            self.sub_title = "Projects"
+            return ("← Projects", "", self._active_project_alias or "Project")
+        return ("", "Projects", "")
+
+    def _update_header(self) -> None:
+        self.sub_title = (
+            f"{self._active_project_alias or 'Project'} / Workspaces"
+            if self._mode == "workspaces"
+            else "Projects"
+        )
+        left, center, right = self._header_texts()
+        self.query_one("#projects-left", Static).update(left)
+        self.query_one("#projects-center", Static).update(center)
+        self.query_one("#projects-brand-dot", Static).update("●" if right else "")
+        self.query_one("#projects-brand-text", Static).update(right)
 
     def _active_project(self) -> ProjectInfo | None:
         if self._active_project_alias is None:
@@ -173,7 +187,7 @@ class ProjectsApp(App):
             self._set_selected_index(None)
 
     def _render_current_list(self) -> None:
-        self._update_subtitle()
+        self._update_header()
         if self._mode == "workspaces":
             self._render_workspaces()
         else:
@@ -280,7 +294,7 @@ class ProjectsApp(App):
             self._set_status("")
 
     def _clear_delete_confirmation(self) -> None:
-        self._pending_delete_alias = None
+        self._pending_delete_target = None
 
     def _after_add_modal(self, result: Optional[Tuple[str, str]]) -> None:
         self.query_one("#projects-list", ListView).focus()
@@ -302,12 +316,12 @@ class ProjectsApp(App):
             self._set_status("Could not determine the active project.")
             return
 
-        workspace_name, copy_from = result
-        self._submit_add_worktree(project.alias, workspace_name, copy_from)
+        workspace_name, branch_name = result
+        self._submit_add_worktree(project.alias, workspace_name, branch_name)
 
     def action_close_or_cancel(self) -> None:
-        if self._pending_delete_alias is not None:
-            self._pending_delete_alias = None
+        if self._pending_delete_target is not None:
+            self._pending_delete_target = None
             self._set_status("Delete canceled.")
             return
 
@@ -413,16 +427,15 @@ class ProjectsApp(App):
         self.query_one("#projects-list", ListView).focus()
         self._set_status(result.stdout.strip() or f'Saved project "{alias}".')
 
-    def _submit_add_worktree(self, project_alias: str, workspace_name: str, copy_from: str) -> None:
+    def _submit_add_worktree(self, project_alias: str, workspace_name: str, branch_name: str) -> None:
         if not workspace_name:
             self._set_status("Workspace name is required.")
             return
 
-        branch = copy_from
-        for workspace in self._workspaces:
-            if workspace.name == copy_from:
-                branch = workspace.branch or workspace.name
-                break
+        branch = branch_name.strip()
+        if not branch:
+            self._set_status("Base branch is required.")
+            return
 
         args = ["workspace", "create", project_alias, workspace_name, branch]
 
@@ -465,8 +478,31 @@ class ProjectsApp(App):
         self.exit()
 
     def action_delete_selected(self) -> None:
-        if self._mode != "projects":
-            self._set_status("Workspace removal is available through the CLI for now.")
+        if self._mode == "workspaces":
+            project = self._active_project()
+            workspace = self._selected_workspace()
+            if project is None or workspace is None:
+                self._set_status("No workspace selected.")
+                return
+
+            pending_target = f"workspace:{project.alias}/{workspace.name}"
+            if self._pending_delete_target != pending_target:
+                self._pending_delete_target = pending_target
+                self._set_status(f'Press `d` again to delete workspace "{workspace.name}".')
+                return
+
+            result = self._run_cli(["workspace", "remove", project.alias, workspace.name])
+            self._pending_delete_target = None
+            if result is None:
+                return
+            if result.returncode != 0:
+                self._set_status(result.stderr.strip() or result.stdout.strip() or "Could not remove workspace.")
+                return
+
+            self._refresh_projects()
+            self._sync_list(clear_status=True)
+            self.query_one("#projects-list", ListView).focus()
+            self._set_status(result.stdout.strip() or f'Removed workspace "{workspace.name}".')
             return
 
         project = self._selected_project()
@@ -474,13 +510,14 @@ class ProjectsApp(App):
             self._set_status("No project selected.")
             return
 
-        if self._pending_delete_alias != project.alias:
-            self._pending_delete_alias = project.alias
+        pending_target = f"project:{project.alias}"
+        if self._pending_delete_target != pending_target:
+            self._pending_delete_target = pending_target
             self._set_status(f'Press `d` again to delete "{project.alias}".')
             return
 
         result = self._run_cli(["project", "remove", project.alias])
-        self._pending_delete_alias = None
+        self._pending_delete_target = None
         if result is None:
             return
         if result.returncode != 0:

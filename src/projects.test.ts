@@ -203,6 +203,39 @@ test("readProjectsRegistry accepts v2 workspaces without explicit branch or work
   });
 });
 
+test("readProjectsRegistry prefers a worktree's live branch over stale stored metadata", () => {
+  withTempDir((dir) => {
+    const repoPath = join(dir, "repo");
+    const configPath = configPathFor(dir);
+    initGitRepo(repoPath);
+
+    addProject("repo", repoPath, { configPath });
+    createWorktreeWorkspace("repo", "feature-one", { configPath });
+
+    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+    config.projects.repo.workspaces["feature-one"].branch = "stale-branch";
+    writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+
+    const registry = readProjectsRegistry(configPath);
+    assert.equal(registry.projects.repo.workspaces["feature-one"].branch, "feature-one");
+  });
+});
+
+test("readProjectsRegistry refreshes the root workspace branch after switching branches", () => {
+  withTempDir((dir) => {
+    const repoPath = join(dir, "repo");
+    const configPath = configPathFor(dir);
+    initGitRepo(repoPath);
+
+    addProject("repo", repoPath, { configPath });
+    runGit(["checkout", "-b", "feature-root"], repoPath);
+
+    const project = getProject("repo", configPath);
+    assert.ok(project);
+    assert.equal(project.workspaces.default.branch, "feature-root");
+  });
+});
+
 test("readProjectsRegistry fails clearly for invalid JSON", () => {
   withTempDir((dir) => {
     const configPath = configPathFor(dir);
@@ -792,6 +825,44 @@ test("python load_projects reads v2 projects with multiple workspaces", () => {
   });
 });
 
+test("python load_projects prefers live git branch state over stored branch metadata", () => {
+  withTempDir((dir) => {
+    const configPath = configPathFor(dir);
+    const repoPath = join(dir, "repo");
+    initGitRepo(repoPath);
+    addProject("repo", repoPath, { configPath });
+    runGit(["checkout", "-b", "feature-root"], repoPath);
+
+    const result = spawnSync(
+      "python3",
+      [
+        "-c",
+        [
+          "import json",
+          "import os",
+          "import sys",
+          `os.environ['XDG_CONFIG_HOME'] = ${JSON.stringify(dir)}`,
+          "sys.path.insert(0, 'python')",
+          "from latch.projects_store import load_projects",
+          "items = load_projects()",
+          "default_branch = next(workspace.branch for workspace in items[0].workspaces if workspace.is_default)",
+          "print(json.dumps({'alias': items[0].alias, 'branch': default_branch}, sort_keys=True))",
+        ].join("\n"),
+      ],
+      {
+        cwd: realpathSync(process.cwd()),
+        encoding: "utf-8",
+      }
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout.trim()), {
+      alias: "repo",
+      branch: "feature-root",
+    });
+  });
+});
+
 test("python load_projects skips malformed project entries instead of failing the whole list", () => {
   withTempDir((dir) => {
     const configPath = configPathFor(dir);
@@ -861,6 +932,151 @@ test("python load_projects skips malformed project entries instead of failing th
   });
 });
 
+test("python projects app passes the selected branch directly when creating a workspace", () => {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import json",
+        "import sys",
+        "from types import MethodType, SimpleNamespace",
+        "sys.path.insert(0, 'python')",
+        "import ui.projects as projects",
+        "class FocusTarget:",
+        "    def focus(self):",
+        "        pass",
+        "class StatusTarget:",
+        "    def update(self, message):",
+        "        pass",
+        "app = projects.ProjectsApp('/tmp')",
+        "calls = {}",
+        "def run_cli(self, args):",
+        "    calls['args'] = args",
+        "    return SimpleNamespace(returncode=0, stdout='', stderr='')",
+        "def query_one(self, selector, *_args, **_kwargs):",
+        "    if selector == '#projects-list':",
+        "        return FocusTarget()",
+        "    if selector == '#status':",
+        "        return StatusTarget()",
+        "    raise AssertionError(selector)",
+        "app._run_cli = MethodType(run_cli, app)",
+        "app._refresh_projects = MethodType(lambda self: None, app)",
+        "app._sync_list = MethodType(lambda self, **kwargs: None, app)",
+        "app.query_one = MethodType(query_one, app)",
+        "app._submit_add_worktree('frontend', 'feature-two', 'release/1.0')",
+        "print(json.dumps(calls, sort_keys=True))",
+      ].join("\n"),
+    ],
+    {
+      cwd: realpathSync(process.cwd()),
+      encoding: "utf-8",
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(
+    JSON.parse(result.stdout.trim()),
+    { args: ["workspace", "create", "frontend", "feature-two", "release/1.0"] }
+  );
+});
+
+test("python add worktree modal loads local branch suggestions and defaults to the current branch", () => {
+  withTempDir((dir) => {
+    const repoPath = join(dir, "repo");
+    initGitRepo(repoPath);
+    runGit(["checkout", "-b", "feature-root"], repoPath);
+    runGit(["branch", "release/1.0"], repoPath);
+
+    const result = spawnSync(
+      "python3",
+      [
+        "-c",
+        [
+          "import json",
+          "import sys",
+          "sys.path.insert(0, 'python')",
+          "from latch.projects_store import ProjectInfo, WorkspaceInfo",
+          "from ui.projects_modal import AddWorktreeModal",
+          `repo_path = ${JSON.stringify(repoPath)}`,
+          "project = ProjectInfo(",
+          "    'repo',",
+          "    repo_path,",
+          "    repo_path,",
+          "    '',",
+          "    '',",
+          "    None,",
+          "    'default',",
+          "    [WorkspaceInfo('default', repo_path, 'root', 'feature-root', True, None)],",
+          ")",
+          "modal = AddWorktreeModal(project)",
+          "print(json.dumps({'branch': modal._branch_name, 'suggestions': modal._branch_suggestions}, sort_keys=True))",
+        ].join("\n"),
+      ],
+      {
+        cwd: realpathSync(process.cwd()),
+        encoding: "utf-8",
+      }
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout.trim()) as {
+      branch: string;
+      suggestions: string[];
+    };
+    assert.equal(parsed.branch, "feature-root");
+    assert.equal(parsed.suggestions[0], "feature-root");
+    assert.ok(parsed.suggestions.includes("release/1.0"));
+  });
+});
+
+test("python workspace list item renders the richer workspace details", () => {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import json",
+        "import os",
+        "import sys",
+        "sys.path.insert(0, 'python')",
+        "from latch.projects_store import WorkspaceInfo",
+        "from ui.projects_widgets import WorkspaceListItem",
+        "root = WorkspaceInfo('default', '/tmp/frontend', 'root', 'main', True, None)",
+        "home = os.path.expanduser('~')",
+        "path = os.path.join(home, 'Documents', 'Projects', 'open_source', 'Latch', '.latch', 'workspaces', 'feature-one')",
+        "worktree = WorkspaceInfo('feature-one', path, 'worktree', 'feature/add-dir', False, None)",
+        "root_item = WorkspaceListItem(root)",
+        "worktree_item = WorkspaceListItem(worktree)",
+        "print(json.dumps({",
+        "    'root': {'name': root_item._alias.content, 'meta': root_item._meta.content},",
+        "    'worktree': {",
+        "        'name': worktree_item._alias.content,",
+        "        'meta': worktree_item._meta.content,",
+        "        'path': worktree_item._path.content,",
+        "    },",
+        "}, sort_keys=True))",
+      ].join("\n"),
+    ],
+    {
+      cwd: realpathSync(process.cwd()),
+      encoding: "utf-8",
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout.trim()) as {
+    root: { name: string; meta: string };
+    worktree: { name: string; meta: string; path: string };
+  };
+
+  assert.deepEqual(parsed.root, { name: "⌂  root", meta: "⑂  main" });
+  assert.equal(parsed.worktree.name, "⎇  feature-one");
+  assert.equal(parsed.worktree.meta, "⑂  feature/add-dir");
+  assert.ok(parsed.worktree.path.includes(".latch/workspaces/feature-one"));
+  assert.ok(parsed.worktree.path.includes("..."));
+});
+
 test("python projects app open action invokes workspace open when viewing workspaces", () => {
   const result = spawnSync(
     "python3",
@@ -901,6 +1117,100 @@ test("python projects app open action invokes workspace open when viewing worksp
   assert.deepEqual(
     JSON.parse(result.stdout.trim()),
     { args: ["workspace", "open", "frontend", "feature-one", "--current-session"], exited: true }
+  );
+});
+
+test("python projects app header texts reflect the active mode", () => {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import json",
+        "import sys",
+        "sys.path.insert(0, 'python')",
+        "import ui.projects as projects",
+        "app = projects.ProjectsApp('/tmp')",
+        "print(json.dumps({'projects': app._header_texts()}, sort_keys=True))",
+        "app._mode = 'workspaces'",
+        "app._active_project_alias = 'frontend'",
+        "print(json.dumps({'workspaces': app._header_texts()}, sort_keys=True))",
+      ].join("\n"),
+    ],
+    {
+      cwd: realpathSync(process.cwd()),
+      encoding: "utf-8",
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  const lines = result.stdout.trim().split(/\r?\n/);
+  assert.deepEqual(JSON.parse(lines[0]), { projects: ["", "Projects", ""] });
+  assert.deepEqual(JSON.parse(lines[1]), { workspaces: ["← Projects", "", "frontend"] });
+});
+
+test("python projects app delete action invokes workspace remove when viewing workspaces", () => {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import json",
+        "import sys",
+        "from types import MethodType, SimpleNamespace",
+        "sys.path.insert(0, 'python')",
+        "import ui.projects as projects",
+        "app = projects.ProjectsApp('/tmp')",
+        "calls = {'args': []}",
+        "class FocusTarget:",
+        "    def focus(self):",
+        "        calls['focused'] = True",
+        "class StatusTarget:",
+        "    def update(self, message):",
+        "        calls['status'] = message",
+        "def run_cli(self, args):",
+        "    calls['args'].append(args)",
+        "    return SimpleNamespace(returncode=0, stdout='', stderr='')",
+        "def query_one(self, selector, *_args, **_kwargs):",
+        "    if selector == '#projects-list':",
+        "        return FocusTarget()",
+        "    if selector == '#status':",
+        "        return StatusTarget()",
+        "    raise AssertionError(selector)",
+        "workspace = projects.WorkspaceInfo('feature-one', '/tmp/frontend/.latch/workspaces/feature-one', 'worktree', 'feature-one', False, None)",
+        "project = projects.ProjectInfo('frontend', '/tmp/frontend', '/tmp/frontend', '', '', None, 'root', [workspace])",
+        "app._mode = 'workspaces'",
+        "app._projects = [project]",
+        "app._workspaces = [workspace]",
+        "app._active_project_alias = 'frontend'",
+        "app._selected_workspace = MethodType(lambda self: workspace, app)",
+        "app._active_project = MethodType(lambda self: project, app)",
+        "app._run_cli = MethodType(run_cli, app)",
+        "app._refresh_projects = MethodType(lambda self: calls.__setitem__('refreshed', True), app)",
+        "app._sync_list = MethodType(lambda self, **kwargs: calls.__setitem__('synced', kwargs), app)",
+        "app.query_one = MethodType(query_one, app)",
+        "app.action_delete_selected()",
+        "first_status = calls.get('status')",
+        "app.action_delete_selected()",
+        "print(json.dumps({'first_status': first_status, 'args': calls['args'], 'focused': calls.get('focused', False), 'refreshed': calls.get('refreshed', False), 'synced': calls.get('synced')}, sort_keys=True))",
+      ].join("\n"),
+    ],
+    {
+      cwd: realpathSync(process.cwd()),
+      encoding: "utf-8",
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(
+    JSON.parse(result.stdout.trim()),
+    {
+      args: [["workspace", "remove", "frontend", "feature-one"]],
+      first_status: 'Press `d` again to delete workspace "feature-one".',
+      focused: true,
+      refreshed: true,
+      synced: { clear_status: true },
+    }
   );
 });
 

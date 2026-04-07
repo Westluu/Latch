@@ -6,7 +6,7 @@ Launched via `tmux display-popup` so it appears over the full terminal.
 Usage:
     python3 ui/add_worktree_popup.py <project_alias> <output_file>
 
-Writes "workspace_name\ncopy_from" to output_file on success, nothing on cancel.
+Writes "workspace_name\nbranch_name" to output_file on success, nothing on cancel.
 """
 
 from __future__ import annotations
@@ -22,11 +22,11 @@ except ImportError:
 bootstrap_python_root()
 
 from latch import theme
-from latch.projects_store import ProjectInfo, load_projects
+from latch.projects_store import ProjectInfo, load_projects, list_local_branches
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Footer, Header, Input, Static
+from textual.widgets import Button, Footer, Header, Input, Select, Static
 
 
 CSS = """
@@ -85,21 +85,39 @@ Screen {
     content-align: left middle;
 }
 
-#wt-copy-row {
-    height: 3;
-    margin: 0;
+#wt-branch-select {
+    width: 1fr;
+    height: auto;
+    margin: 0 0 1 0;
 }
 
-.wt-source-btn {
-    height: 3;
+#wt-branch-select > SelectCurrent {
     border: round %(border)s;
     background: %(surface_bg)s;
-    color: %(text_muted)s;
-    margin: 0 1 0 0;
+    color: %(text_high)s;
+    padding: 0 1;
 }
 
-.wt-source-btn.-active {
+#wt-branch-select:focus > SelectCurrent,
+#wt-branch-select.-expanded > SelectCurrent {
     border: round %(border_focus)s;
+}
+
+#wt-branch-select > SelectOverlay {
+    width: 1fr;
+    max-height: 8;
+    border: round %(border_subtle)s;
+    background: %(surface_bg)s;
+    color: %(text_high)s;
+}
+
+#wt-branch-select .option-list--option {
+    padding: 0 1;
+    color: %(text_muted)s;
+}
+
+#wt-branch-select .option-list--option-highlighted,
+#wt-branch-select .option-list--option-hover {
     color: %(text_high)s;
 }
 
@@ -164,8 +182,13 @@ class AddWorktreeApp(App):
         super().__init__()
         self.project = project
         self.output_file = output_file
-        self._workspace_names = [w.name for w in project.workspaces]
-        self._copy_from = self._workspace_names[0] if self._workspace_names else "blank"
+        default_branch = next((workspace.branch for workspace in project.workspaces if workspace.is_default and workspace.branch), None)
+        self._branch_suggestions = list_local_branches(project.root_path)
+        if default_branch and default_branch in self._branch_suggestions:
+            self._branch_suggestions = [default_branch] + [
+                branch for branch in self._branch_suggestions if branch != default_branch
+            ]
+        self._branch_name = default_branch or (self._branch_suggestions[0] if self._branch_suggestions else "")
 
     def _slug(self, name: str) -> str:
         return re.sub(r"[^a-z0-9-]", "-", name.lower().strip()).strip("-")
@@ -182,11 +205,16 @@ class AddWorktreeApp(App):
                 yield Input(placeholder="e.g. feature-branch", id="wt-name-input", classes="wt-input")
                 yield Static("Path", classes="wt-label")
                 yield Static(self._preview_path(""), id="wt-path-display")
-                yield Static("Copy from", classes="wt-label")
-                with Horizontal(id="wt-copy-row"):
-                    for name in self._workspace_names:
-                        yield Button(name, id=f"wt-src-{name}", classes="wt-source-btn")
-                    yield Button("blank", id="wt-src-blank", classes="wt-source-btn")
+                yield Static("Base branch", classes="wt-label")
+                if self._branch_suggestions:
+                    yield Select(
+                        [(branch_name, branch_name) for branch_name in self._branch_suggestions],
+                        value=self._branch_name,
+                        allow_blank=False,
+                        id="wt-branch-select",
+                    )
+                else:
+                    yield Static("No local branches found.", id="wt-branch-empty")
             with Horizontal(id="wt-actions-row"):
                 yield Button("esc  Cancel", id="wt-cancel-btn")
                 yield Button("enter  Create", id="wt-create-btn", disabled=True)
@@ -199,32 +227,34 @@ class AddWorktreeApp(App):
 
     def on_mount(self) -> None:
         self._resize_panel()
-        self._refresh_source_buttons()
+        if self._branch_suggestions:
+            self.query_one("#wt-branch-select", Select).value = self._branch_name
+        self.query_one("#wt-create-btn", Button).disabled = not bool(self._branch_name)
         self.query_one("#wt-name-input", Input).focus()
 
     def on_resize(self) -> None:
         self._resize_panel()
-
-    def _refresh_source_buttons(self) -> None:
-        for name in self._workspace_names + ["blank"]:
-            btn = self.query_one(f"#wt-src-{name}", Button)
-            active = name == self._copy_from
-            btn.set_class(active, "-active")
-            btn.label = f"● {name}" if active else name
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id != "wt-name-input":
             return
         name = event.value
         self.query_one("#wt-path-display", Static).update(self._preview_path(name))
-        self.query_one("#wt-create-btn", Button).disabled = not name.strip()
+        self.query_one("#wt-create-btn", Button).disabled = not bool(
+            self.query_one("#wt-name-input", Input).value.strip() and self._branch_name
+        )
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id != "wt-branch-select":
+            return
+        self._branch_name = str(event.value)
+        self.query_one("#wt-create-btn", Button).disabled = not bool(
+            self.query_one("#wt-name-input", Input).value.strip() and self._branch_name
+        )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id or ""
-        if btn_id.startswith("wt-src-"):
-            self._copy_from = btn_id[len("wt-src-"):]
-            self._refresh_source_buttons()
-        elif btn_id == "wt-cancel-btn":
+        if btn_id == "wt-cancel-btn":
             self.action_cancel()
         elif btn_id == "wt-create-btn":
             self.action_create()
@@ -234,12 +264,13 @@ class AddWorktreeApp(App):
 
     def action_create(self) -> None:
         name = self.query_one("#wt-name-input", Input).value.strip()
-        if not name:
+        branch_name = self._branch_name.strip()
+        if not name or not branch_name:
             return
         slug = self._slug(name)
         try:
             with open(self.output_file, "w") as f:
-                f.write(f"{slug}\n{self._copy_from}\n")
+                f.write(f"{slug}\n{branch_name}\n")
         except OSError:
             pass
         self.exit()

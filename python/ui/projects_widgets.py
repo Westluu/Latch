@@ -14,7 +14,37 @@ def shorten_path(path: str, max_len: int = 52) -> str:
     display = path.replace(home, "~", 1) if path.startswith(home) else path
     if len(display) <= max_len:
         return display
+
+    separator = os.sep
+    prefix = "~" if display.startswith("~" + separator) else (separator if display.startswith(separator) else "")
+    body = display[len(prefix):] if prefix else display
+    parts = [segment for segment in body.split(separator) if segment]
+    if not parts:
+        return display[:max_len]
+
+    for suffix_count in range(min(len(parts), 4), 0, -1):
+        suffix = separator.join(parts[-suffix_count:])
+        if prefix:
+            candidate = f"{prefix}...{separator}{suffix}"
+        else:
+            head = parts[0]
+            candidate = f"{head}{separator}...{separator}{suffix}"
+        if len(candidate) <= max_len:
+            return candidate
+
     return "..." + display[-(max_len - 3):]
+
+
+def workspace_label(workspace: WorkspaceInfo) -> str:
+    return "root" if workspace.kind == "root" else workspace.name
+
+
+def workspace_branch_label(workspace: WorkspaceInfo) -> str:
+    return workspace.branch or "no branch"
+
+
+def workspace_kind_icon(workspace: WorkspaceInfo) -> str:
+    return "⌂" if workspace.kind == "root" else "⎇"
 
 
 PROJECTS_LIST_CSS = """
@@ -22,21 +52,49 @@ Screen {
     background: %(app_bg)s;
 }
 
-Header {
+#projects-topbar {
+    height: 4;
+    padding: 1 2 0 2;
+    border-bottom: solid %(border_subtle)s;
     background: %(app_bg)s;
-    color: %(text_muted)s;
-    height: 2;
-    padding: 0 2;
+    align: left middle;
 }
 
-Header .header--highlight {
-    background: %(app_bg)s;
+#projects-left {
+    width: auto;
+    color: %(text_muted)s;
+    text-style: bold;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+    content-align: left middle;
+}
+
+#projects-center {
+    width: 1fr;
+    color: %(text_muted)s;
+    text-style: bold;
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+    content-align: center middle;
+}
+
+#projects-right {
+    width: auto;
+    content-align: right middle;
+    align: right middle;
+}
+
+#projects-brand-dot {
+    width: auto;
+    color: %(accent_github)s;
+    text-style: bold;
+    margin: 0 1 0 0;
+}
+
+#projects-brand-text {
+    width: auto;
     color: %(text_primary)s;
     text-style: bold;
-}
-
-HeaderIcon {
-    display: none;
 }
 
 Footer {
@@ -58,12 +116,6 @@ Footer {
 
 .footer--spacer {
     background: %(app_bg)s;
-}
-
-#header-rule {
-    color: %(border_subtle)s;
-    background: %(app_bg)s;
-    margin: 0;
 }
 
 #search-bar {
@@ -186,6 +238,7 @@ ListView > ListItem {
 .project-row.-selected .project-path {
     color: %(text_faint)s;
 }
+
 """ % {
     "accent": theme.ACCENT,
     "accent_github": "#4493F8",
@@ -223,13 +276,12 @@ class WorkspaceListItem(ListItem):
     def __init__(self, workspace: WorkspaceInfo) -> None:
         super().__init__()
         self.workspace = workspace
-        label = workspace.name + (" *" if workspace.is_default else "")
-        self._alias = Static(label, classes="project-alias")
-        details = workspace.kind
-        if workspace.branch:
-            details = f"{details}  {workspace.branch}"
-        self._meta = Static(details, classes="project-meta")
-        self._path = Static(shorten_path(workspace.path, 68), classes="project-path")
+        self._alias = Static(
+            f"{workspace_kind_icon(workspace)}  {workspace_label(workspace)}",
+            classes="project-alias",
+        )
+        self._meta = Static(f"⑂  {workspace_branch_label(workspace)}", classes="project-meta")
+        self._path = Static(shorten_path(workspace.path, 52), classes="project-path")
         self._row = Vertical(self._alias, self._meta, self._path, classes="project-row")
 
     def compose(self) -> ComposeResult:

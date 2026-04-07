@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from dataclasses import dataclass, field
 
 
@@ -25,6 +26,42 @@ class ProjectInfo:
     last_opened_at: str | None
     default_workspace: str = "default"
     workspaces: list[WorkspaceInfo] = field(default_factory=list)
+
+
+def _live_git_branch(path: str) -> tuple[bool, str | None]:
+    try:
+        result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=path,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return False, None
+    if result.returncode != 0:
+        return False, None
+    branch = result.stdout.strip()
+    return True, branch or None
+
+
+def current_workspace_branch(path: str, fallback: str | None = None) -> str | None:
+    available, branch = _live_git_branch(path)
+    return branch if available else fallback
+
+
+def list_local_branches(path: str) -> list[str]:
+    try:
+        result = subprocess.run(
+            ["git", "for-each-ref", "--format=%(refname:short)", "--sort=refname", "refs/heads"],
+            cwd=path,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return []
+    if result.returncode != 0:
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
 def get_projects_config_path() -> str:
@@ -70,12 +107,16 @@ def load_projects() -> list[ProjectInfo]:
                 workspace_path = workspace_info.get("path")
                 if not isinstance(workspace_path, str):
                     continue
+                stored_branch = workspace_info.get("branch")
                 workspace_items.append(
                     WorkspaceInfo(
                         name=workspace_name,
                         path=workspace_path,
                         kind=workspace_info.get("kind", "worktree"),
-                        branch=workspace_info.get("branch"),
+                        branch=current_workspace_branch(
+                            workspace_path,
+                            stored_branch if isinstance(stored_branch, str) or stored_branch is None else None,
+                        ),
                         is_default=workspace_name == default_workspace,
                         last_opened_at=workspace_info.get("lastOpenedAt"),
                     )
