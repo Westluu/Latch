@@ -1030,6 +1030,53 @@ test("python add worktree modal loads local branch suggestions and defaults to t
   });
 });
 
+test("python workspace list item renders the richer workspace details", () => {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import json",
+        "import os",
+        "import sys",
+        "sys.path.insert(0, 'python')",
+        "from latch.projects_store import WorkspaceInfo",
+        "from ui.projects_widgets import WorkspaceListItem",
+        "root = WorkspaceInfo('default', '/tmp/frontend', 'root', 'main', True, None)",
+        "home = os.path.expanduser('~')",
+        "path = os.path.join(home, 'Documents', 'Projects', 'open_source', 'Latch', '.latch', 'workspaces', 'feature-one')",
+        "worktree = WorkspaceInfo('feature-one', path, 'worktree', 'feature/add-dir', False, None)",
+        "root_item = WorkspaceListItem(root)",
+        "worktree_item = WorkspaceListItem(worktree)",
+        "print(json.dumps({",
+        "    'root': {'name': root_item._alias.content, 'meta': root_item._meta.content},",
+        "    'worktree': {",
+        "        'name': worktree_item._alias.content,",
+        "        'meta': worktree_item._meta.content,",
+        "        'path': worktree_item._path.content,",
+        "    },",
+        "}, sort_keys=True))",
+      ].join("\n"),
+    ],
+    {
+      cwd: realpathSync(process.cwd()),
+      encoding: "utf-8",
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout.trim()) as {
+    root: { name: string; meta: string };
+    worktree: { name: string; meta: string; path: string };
+  };
+
+  assert.deepEqual(parsed.root, { name: "⌂  root", meta: "⑂  main" });
+  assert.equal(parsed.worktree.name, "⎇  feature-one");
+  assert.equal(parsed.worktree.meta, "⑂  feature/add-dir");
+  assert.ok(parsed.worktree.path.includes(".latch/workspaces/feature-one"));
+  assert.ok(parsed.worktree.path.includes("..."));
+});
+
 test("python projects app open action invokes workspace open when viewing workspaces", () => {
   const result = spawnSync(
     "python3",
@@ -1071,6 +1118,35 @@ test("python projects app open action invokes workspace open when viewing worksp
     JSON.parse(result.stdout.trim()),
     { args: ["workspace", "open", "frontend", "feature-one", "--current-session"], exited: true }
   );
+});
+
+test("python projects app header texts reflect the active mode", () => {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import json",
+        "import sys",
+        "sys.path.insert(0, 'python')",
+        "import ui.projects as projects",
+        "app = projects.ProjectsApp('/tmp')",
+        "print(json.dumps({'projects': app._header_texts()}, sort_keys=True))",
+        "app._mode = 'workspaces'",
+        "app._active_project_alias = 'frontend'",
+        "print(json.dumps({'workspaces': app._header_texts()}, sort_keys=True))",
+      ].join("\n"),
+    ],
+    {
+      cwd: realpathSync(process.cwd()),
+      encoding: "utf-8",
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  const lines = result.stdout.trim().split(/\r?\n/);
+  assert.deepEqual(JSON.parse(lines[0]), { projects: ["", "Projects", ""] });
+  assert.deepEqual(JSON.parse(lines[1]), { workspaces: ["← Projects", "", "frontend"] });
 });
 
 test("python projects app delete action invokes workspace remove when viewing workspaces", () => {

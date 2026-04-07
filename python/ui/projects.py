@@ -25,7 +25,7 @@ from textual.actions import SkipAction
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
-from textual.widgets import Footer, Header, Input, ListItem, ListView, Rule, Static
+from textual.widgets import Footer, Input, ListItem, ListView, Static
 
 try:
     from .projects_modal import AddWorkspaceModal, AddWorktreeModal
@@ -68,8 +68,12 @@ class ProjectsApp(App):
         self._active_project_alias: str | None = None
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=False)
-        yield Rule(id="header-rule")
+        with Horizontal(id="projects-topbar"):
+            yield Static("", id="projects-left")
+            yield Static("", id="projects-center")
+            with Horizontal(id="projects-right"):
+                yield Static("●", id="projects-brand-dot")
+                yield Static("LATCH", id="projects-brand-text")
         with Horizontal(id="search-bar"):
             yield Static("○", id="search-icon")
             yield Input(placeholder="Search projects…", id="search-input")
@@ -79,20 +83,30 @@ class ProjectsApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.title = "LATCH / WORKSPACES"
-        self._update_subtitle()
+        self.title = "LATCH"
+        self._update_header()
         self._refresh_projects()
         if self._projects:
             self.query_one("#projects-list", ListView).focus()
         else:
             self.query_one("#search-input", Input).focus()
 
-    def _update_subtitle(self) -> None:
+    def _header_texts(self) -> tuple[str, str, str]:
         if self._mode == "workspaces":
-            alias = self._active_project_alias or "Project"
-            self.sub_title = f"{alias} / Workspaces"
-        else:
-            self.sub_title = "Projects"
+            return ("← Projects", "", self._active_project_alias or "Project")
+        return ("", "Projects", "")
+
+    def _update_header(self) -> None:
+        self.sub_title = (
+            f"{self._active_project_alias or 'Project'} / Workspaces"
+            if self._mode == "workspaces"
+            else "Projects"
+        )
+        left, center, right = self._header_texts()
+        self.query_one("#projects-left", Static).update(left)
+        self.query_one("#projects-center", Static).update(center)
+        self.query_one("#projects-brand-dot", Static).update("●" if right else "")
+        self.query_one("#projects-brand-text", Static).update(right)
 
     def _active_project(self) -> ProjectInfo | None:
         if self._active_project_alias is None:
@@ -173,7 +187,7 @@ class ProjectsApp(App):
             self._set_selected_index(None)
 
     def _render_current_list(self) -> None:
-        self._update_subtitle()
+        self._update_header()
         if self._mode == "workspaces":
             self._render_workspaces()
         else:
