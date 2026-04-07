@@ -34,7 +34,7 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
         height: 31;
         background: %(modal_bg)s;
         border: round %(border)s;
-        padding: 0 1;
+        padding: 0 1 1 1;
         overflow: hidden hidden;
     }
 
@@ -68,11 +68,7 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
         height: 4;
         border-top: solid %(border_subtle)s;
         padding: 0 1;
-        align: left middle;
-    }
-
-    .add-footer-spacer {
-        width: 1fr;
+        align: center middle;
     }
 
     #add-footer-buttons {
@@ -273,11 +269,9 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
                             yield Static("MATCHES (TAB TO NAVIGATE)", id="matches-title")
                             yield ListView(id="matches-list")
             with Horizontal(id="add-footer"):
-                yield Static("", classes="add-footer-spacer")
                 with Horizontal(id="add-footer-buttons"):
                     yield Button("esc  Cancel", id="add-cancel-btn", classes="add-action-btn")
                     yield Button("enter  Add", id="add-create-btn", classes="add-action-btn", disabled=True)
-                yield Static("", classes="add-footer-spacer")
 
     def on_mount(self) -> None:
         self._refresh_matches()
@@ -331,10 +325,7 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
         if os.path.normpath(current_resolved) == os.path.normpath(selected_path):
             return False
 
-        display_path = self._display_path(selected_path)
-        if not display_path.endswith(os.sep):
-            display_path = f"{display_path}{os.sep}"
-        path_input.value = display_path
+        path_input.value = self._display_path(selected_path)
         path_input.focus()
         self._refresh_matches()
         return True
@@ -479,11 +470,6 @@ class AddWorkspaceModal(ModalScreen[Optional[Tuple[str, str]]]):
         if event.list_view.id != "matches-list":
             return
         self._set_selected_suggestion(event.list_view.index)
-
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        if event.list_view.id != "matches-list":
-            return
-        self._apply_selected_suggestion()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "modal-alias":

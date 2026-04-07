@@ -10,3 +10,6 @@ dist/
 .sidecar-start.sh
 .sidecar-base
 .td-root
+.conductor/
+.agents/
+.latch/
