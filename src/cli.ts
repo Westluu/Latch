@@ -1,13 +1,65 @@
 #!/usr/bin/env node
 
-import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSession, launchWithAgent, saveSidecarPaneId, focusOrOpenSidecar, focusOrOpenWorkspaces, openChatPopup, openProjectsPopup, switchClientToAgentSession, openCommandInNewTerminal, openAgentInTargetPane } from "./tmux.js";
+import { isInsideTmux, splitAndLaunchSidecar, splitAndLaunchTray, launchNewSession, launchWithAgent, saveSidecarPaneId, focusOrOpenSidecar, focusOrOpenWorkspaces, openChatPopup, openProjectsPopup, switchClientToAgentSession, openCommandInNewTerminal, openAgentInTargetPane, getSavedAgentCommand } from "./tmux.js";
 import { sendSidecarMessage } from "./ipc.js";
 import { initHook, removeHook } from "./init.js";
 import { addCurrentProject, addProject, createWorktreeWorkspace, getProject, getProjectPath, getWorkspace, listProjects, listWorkspaces, markProjectOpened, markWorkspaceOpened, removeProject, removeWorkspace } from "./projects.js";
 import { findLatestSessionId } from "./session-lookup.js";
 import { fileURLToPath } from "node:url";
 
-const args = process.argv.slice(2);
+const DEFAULT_AGENT_COMMAND = "claude";
+const AGENTS: Record<string, string> = {
+  claude: "claude",
+  slate: "slate",
+};
+
+type ParsedArgs = {
+  args: string[];
+  agentOverride: string | null;
+};
+
+function extractAgentOption(argv: string[]): ParsedArgs {
+  const args: string[] = [];
+  let agentOverride: string | null = null;
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--agent") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        console.error("Usage: --agent <command>");
+        process.exit(1);
+      }
+      agentOverride = value.trim();
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith("--agent=")) {
+      const value = arg.slice("--agent=".length).trim();
+      if (!value) {
+        console.error("Usage: --agent <command>");
+        process.exit(1);
+      }
+      agentOverride = value;
+      continue;
+    }
+
+    args.push(arg);
+  }
+
+  return { args, agentOverride };
+}
+
+function resolveAgentCommand(cwd: string, agentOverride: string | null): string {
+  if (agentOverride) return agentOverride;
+  const envAgent = process.env.LATCH_AGENT?.trim();
+  if (envAgent) return envAgent;
+  return getSavedAgentCommand(cwd) ?? DEFAULT_AGENT_COMMAND;
+}
+
+const parsedArgs = extractAgentOption(process.argv.slice(2));
+const args = parsedArgs.args;
 const command = args[0];
 
 function printHelp(): void {
@@ -16,16 +68,18 @@ latch — terminal sidecar for agent-driven CLI workflows
 
 Usage:
   latch claude               Launch Claude Code in a tmux session with Latch
-  latch <project>            Launch Claude Code for a saved project
+  latch slate                Launch Slate in a tmux session with Latch
+  latch <project>            Launch the saved project with the active agent
   latch projects             Open the projects picker as a popup
-  latch workspaces           Open the workspaces picker in a left pane
   latch project add --current <name>
   latch project add <path> <name>
-  latch project open <name> [--popup|--tab|--current-session]
+  latch project open <name> [--popup|--tab|--current-session] [--agent <command>]
   latch project list
   latch project remove <name>
   latch workspace list [project]
   latch workspace create <project> <workspace> [branch]
+  latch workspace open <project> <workspace> [--popup|--tab|--current-session] [--agent <command>]
+  latch workspaces           Open the workspaces picker in a left pane
   latch open <file>          Open a file in the Latch preview
   latch toggle               Focus sidecar if open, or open it if closed
   latch chat                 Open conversation viewer as a floating popup
@@ -47,12 +101,20 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\"'\"'`)}'`;
 }
 
-function projectLaunchCommand(alias: string): string {
+function projectLaunchCommand(alias: string, agentCommand: string): string {
   const aliasArg = shellQuote(alias);
-  return `latch ${aliasArg}`;
+  if (agentCommand === DEFAULT_AGENT_COMMAND) {
+    return `latch ${aliasArg}`;
+  }
+  const agentArg = shellQuote(agentCommand);
+  return `latch project open ${aliasArg} --agent ${agentArg}`;
 }
 
-function openSavedProject(alias: string, options?: { popup?: boolean; tab?: boolean; currentSession?: boolean }): never {
+function openSavedProject(
+  alias: string,
+  agentCommand: string,
+  options?: { popup?: boolean; tab?: boolean; currentSession?: boolean }
+): never {
   try {
     const project = getProject(alias);
     if (!project) {
@@ -63,29 +125,34 @@ function openSavedProject(alias: string, options?: { popup?: boolean; tab?: bool
 
     markProjectOpened(alias);
     if (options?.popup) {
-      switchClientToAgentSession(projectPath, "claude");
+      switchClientToAgentSession(projectPath, agentCommand);
     }
     if (options?.currentSession) {
-      openAgentInTargetPane(process.cwd(), projectPath, "claude");
+      openAgentInTargetPane(process.cwd(), projectPath, agentCommand);
     }
     if (options?.tab) {
-      openCommandInNewTerminal(process.cwd(), projectLaunchCommand(alias));
+      openCommandInNewTerminal(process.cwd(), projectLaunchCommand(alias, agentCommand));
     }
-    launchWithAgent(projectPath, "claude");
+    launchWithAgent(projectPath, agentCommand);
   } catch (error: unknown) {
     exitWithError(error);
   }
 }
 
-function workspaceLaunchCommand(projectAlias: string, workspaceName: string): string {
+function workspaceLaunchCommand(projectAlias: string, workspaceName: string, agentCommand: string): string {
   const projectArg = shellQuote(projectAlias);
   const workspaceArg = shellQuote(workspaceName);
-  return `latch workspace open ${projectArg} ${workspaceArg}`;
+  if (agentCommand === DEFAULT_AGENT_COMMAND) {
+    return `latch workspace open ${projectArg} ${workspaceArg}`;
+  }
+  const agentArg = shellQuote(agentCommand);
+  return `latch workspace open ${projectArg} ${workspaceArg} --agent ${agentArg}`;
 }
 
 function openSavedWorkspace(
   projectAlias: string,
   workspaceName: string,
+  agentCommand: string,
   options?: { popup?: boolean; tab?: boolean; currentSession?: boolean }
 ): never {
   try {
@@ -97,15 +164,15 @@ function openSavedWorkspace(
 
     markWorkspaceOpened(projectAlias, workspaceName);
     if (options?.popup) {
-      switchClientToAgentSession(workspace.path, "claude");
+      switchClientToAgentSession(workspace.path, agentCommand);
     }
     if (options?.currentSession) {
-      openAgentInTargetPane(process.cwd(), workspace.path, "claude");
+      openAgentInTargetPane(process.cwd(), workspace.path, agentCommand);
     }
     if (options?.tab) {
-      openCommandInNewTerminal(process.cwd(), workspaceLaunchCommand(projectAlias, workspaceName));
+      openCommandInNewTerminal(process.cwd(), workspaceLaunchCommand(projectAlias, workspaceName, agentCommand));
     }
-    launchWithAgent(workspace.path, "claude");
+    launchWithAgent(workspace.path, agentCommand);
   } catch (error: unknown) {
     exitWithError(error);
   }
@@ -134,7 +201,7 @@ function handleProjectCommand(projectArgs: string[]): void {
 Usage:
   latch project add --current <name>
   latch project add <path> <name>
-  latch project open <name> [--popup|--tab|--current-session]
+  latch project open <name> [--popup|--tab|--current-session] [--agent <command>]
   latch project list
   latch project remove <name>
 `);
@@ -180,16 +247,17 @@ Usage:
   }
 
   if (subcommand === "open") {
+    const agentCommand = resolveAgentCommand(process.cwd(), parsedArgs.agentOverride);
     const alias = projectArgs[1];
     const popup = projectArgs.includes("--popup");
     const tab = projectArgs.includes("--tab");
     const currentSession = projectArgs.includes("--current-session");
     const extraArgs = projectArgs.slice(2).filter((arg) => arg !== "--popup" && arg !== "--tab" && arg !== "--current-session");
     if (!alias || extraArgs.length > 0) {
-      console.error("Usage: latch project open <name> [--popup|--tab|--current-session]");
+      console.error("Usage: latch project open <name> [--popup|--tab|--current-session] [--agent <command>]");
       process.exit(1);
     }
-    openSavedProject(alias, { popup, tab, currentSession });
+    openSavedProject(alias, agentCommand, { popup, tab, currentSession });
   }
 
   if (subcommand === "remove") {
@@ -254,7 +322,7 @@ function handleWorkspaceCommand(workspaceArgs: string[]): void {
 Usage:
   latch workspace list [project]
   latch workspace create <project> <workspace> [branch]
-  latch workspace open <project> <workspace> [--popup|--tab|--current-session]
+  latch workspace open <project> <workspace> [--popup|--tab|--current-session] [--agent <command>]
   latch workspace remove <project> <workspace>
 `);
     process.exit(0);
@@ -296,6 +364,7 @@ Usage:
   }
 
   if (subcommand === "open") {
+    const agentCommand = resolveAgentCommand(process.cwd(), parsedArgs.agentOverride);
     const projectAlias = workspaceArgs[1];
     const workspaceName = workspaceArgs[2];
     const popup = workspaceArgs.includes("--popup");
@@ -305,11 +374,11 @@ Usage:
       .slice(3)
       .filter((arg) => arg !== "--popup" && arg !== "--tab" && arg !== "--current-session");
     if (!projectAlias || !workspaceName || extraArgs.length > 0) {
-      console.error("Usage: latch workspace open <project> <workspace> [--popup|--tab|--current-session]");
+      console.error("Usage: latch workspace open <project> <workspace> [--popup|--tab|--current-session] [--agent <command>]");
       process.exit(1);
     }
 
-    openSavedWorkspace(projectAlias, workspaceName, { popup, tab, currentSession });
+    openSavedWorkspace(projectAlias, workspaceName, agentCommand, { popup, tab, currentSession });
   }
 
   if (subcommand === "remove") {
@@ -342,10 +411,6 @@ if (args.includes("--version") || args.includes("-v")) {
   console.log("latch v0.1.0");
   process.exit(0);
 }
-
-const AGENTS: Record<string, string> = {
-  claude: "claude",
-};
 
 if (command && command in AGENTS) {
   const cwd = process.cwd();
@@ -396,12 +461,13 @@ if (command === "chat") {
 
 if (command === "projects") {
   const cwd = process.cwd();
+  const agentCommand = resolveAgentCommand(cwd, parsedArgs.agentOverride);
   if (!isInsideTmux()) {
     console.error("latch projects: must be run inside a tmux session.");
     process.exit(1);
   }
   try {
-    openProjectsPopup(cwd);
+    openProjectsPopup(cwd, agentCommand);
   } catch (e: unknown) {
     console.error("latch projects: failed to open popup:", (e as Error).message);
     process.exit(1);
@@ -411,12 +477,13 @@ if (command === "projects") {
 
 if (command === "workspaces") {
   const cwd = process.cwd();
+  const agentCommand = resolveAgentCommand(cwd, parsedArgs.agentOverride);
   if (!isInsideTmux()) {
     console.error("latch workspaces: must be run inside a tmux session.");
     process.exit(1);
   }
   try {
-    focusOrOpenWorkspaces(cwd);
+    focusOrOpenWorkspaces(cwd, agentCommand);
   } catch (e: unknown) {
     console.error("latch workspaces: failed to open pane:", (e as Error).message);
     process.exit(1);
@@ -488,7 +555,7 @@ if (command) {
   try {
     const project = getProject(command);
     if (project) {
-      openSavedProject(command);
+      openSavedProject(command, resolveAgentCommand(process.cwd(), parsedArgs.agentOverride));
     }
   } catch (error: unknown) {
     exitWithError(error);

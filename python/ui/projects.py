@@ -4,7 +4,7 @@ Latch workspaces picker TUI.
 Launched either in a left tmux pane or via `tmux display-popup`.
 
 Usage:
-    python3 ui/projects.py <cwd>
+    python3 ui/projects.py <cwd> [agent]
 """
 
 from __future__ import annotations
@@ -14,9 +14,9 @@ import subprocess
 from typing import Optional, Sequence, Tuple, TypeVar
 
 try:
-    from ._runtime import bootstrap_python_root, dist_cli_path, require_directory_arg
+    from ._runtime import arg_value, bootstrap_python_root, dist_cli_path, require_directory_arg
 except ImportError:
-    from _runtime import bootstrap_python_root, dist_cli_path, require_directory_arg
+    from _runtime import arg_value, bootstrap_python_root, dist_cli_path, require_directory_arg
 
 bootstrap_python_root()
 
@@ -35,6 +35,7 @@ except ImportError:
     from projects_widgets import PROJECTS_LIST_CSS, ProjectListItem, WorkspaceListItem
 
 T = TypeVar("T")
+DEFAULT_AGENT_COMMAND = "claude"
 
 
 class ProjectsApp(App):
@@ -46,6 +47,7 @@ class ProjectsApp(App):
         Binding("q", "quit", "Quit"),
         Binding("d", "delete_selected", "Delete"),
         Binding("enter", "open_selected", "Open"),
+        Binding("s", "open_selected_in_slate", "Slate"),
         Binding("ctrl+t,t", "open_selected_in_tab", "Open in Tab", show=False, priority=True),
         Binding("right,l", "view_workspaces", "Workspaces", show=False, priority=True),
         Binding("left,h,backspace", "back", "Back", show=False, priority=True),
@@ -55,9 +57,10 @@ class ProjectsApp(App):
         Binding("r", "refresh", "Refresh", show=False),
     ]
 
-    def __init__(self, cwd: str) -> None:
+    def __init__(self, cwd: str, agent_command: str = DEFAULT_AGENT_COMMAND) -> None:
         super().__init__()
         self.cwd = cwd
+        self.agent_command = agent_command or DEFAULT_AGENT_COMMAND
         self._projects: list[ProjectInfo] = []
         self._filtered_projects: list[ProjectInfo] = []
         self._workspaces: list[WorkspaceInfo] = []
@@ -239,14 +242,19 @@ class ProjectsApp(App):
     def _cli_path(self) -> str:
         return dist_cli_path()
 
-    def _run_cli(self, args: list[str]) -> subprocess.CompletedProcess[str] | None:
+    def _run_cli(self, args: list[str], *, agent_command: str | None = None) -> subprocess.CompletedProcess[str] | None:
         cli_path = self._cli_path()
         if not os.path.exists(cli_path):
             self._set_status("dist/cli.js not found. Run `npm run build` first.")
             return None
 
+        cli_args = [*args]
+        selected_agent = agent_command or self.agent_command
+        if selected_agent != DEFAULT_AGENT_COMMAND:
+            cli_args.extend(["--agent", selected_agent])
+
         return subprocess.run(
-            ["node", cli_path, *args],
+            ["node", cli_path, *cli_args],
             cwd=self.cwd,
             capture_output=True,
             text=True,
@@ -451,9 +459,11 @@ class ProjectsApp(App):
         self.query_one("#projects-list", ListView).focus()
         self._set_status(result.stdout.strip() or f'Created workspace "{workspace_name}".')
 
-    def _open_selected_target(self, *, in_tab: bool) -> None:
+    def _open_selected_target(self, *, in_tab: bool, agent_command: str | None = None) -> None:
         flag = "--tab" if in_tab else "--current-session"
         tab_label = " in a new tab" if in_tab else ""
+        using_slate = (agent_command or self.agent_command) == "slate"
+        fallback_agent_label = " in Slate" if using_slate and not in_tab else ""
 
         if self._mode == "workspaces":
             project = self._active_project()
@@ -461,15 +471,15 @@ class ProjectsApp(App):
             if project is None or workspace is None:
                 return
             args = ["workspace", "open", project.alias, workspace.name, flag]
-            fallback = f"Could not open workspace{tab_label}."
+            fallback = f"Could not open workspace{fallback_agent_label}{tab_label}."
         else:
             project = self._selected_project()
             if not project:
                 return
             args = ["project", "open", project.alias, flag]
-            fallback = f"Could not open project{tab_label}."
+            fallback = f"Could not open project{fallback_agent_label}{tab_label}."
 
-        result = self._run_cli(args)
+        result = self._run_cli(args, agent_command=agent_command)
         if result is None:
             return
         if result.returncode != 0:
@@ -530,6 +540,9 @@ class ProjectsApp(App):
     def action_open_selected(self) -> None:
         self._open_selected_target(in_tab=False)
 
+    def action_open_selected_in_slate(self) -> None:
+        self._open_selected_target(in_tab=False, agent_command="slate")
+
     def action_open_selected_in_tab(self) -> None:
         self._open_selected_target(in_tab=True)
 
@@ -537,6 +550,6 @@ class ProjectsApp(App):
 if __name__ == "__main__":
     import sys
 
-    cwd = require_directory_arg(sys.argv, 1, "Usage: python3 ui/projects.py <cwd>")
-    app = ProjectsApp(cwd)
+    cwd = require_directory_arg(sys.argv, 1, "Usage: python3 ui/projects.py <cwd> [agent]")
+    app = ProjectsApp(cwd, arg_value(sys.argv, 2, DEFAULT_AGENT_COMMAND))
     app.run()

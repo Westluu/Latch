@@ -269,6 +269,7 @@ test("validateProjectAlias rejects invalid and reserved aliases", () => {
   assert.throws(() => validateProjectAlias("chat"), /reserved/);
   assert.throws(() => validateProjectAlias("projects"), /reserved/);
   assert.throws(() => validateProjectAlias("workspaces"), /reserved/);
+  assert.throws(() => validateProjectAlias("slate"), /reserved/);
 });
 
 test("addProject normalizes relative paths using cwd", () => {
@@ -658,6 +659,32 @@ test("python projects app registers ctrl+t for open in tab", () => {
   assert.equal(lines[1], "True");
 });
 
+test("python projects app registers s for opening in Slate", () => {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import sys",
+        "sys.path.insert(0, 'python')",
+        "import ui.projects as projects",
+        "binding = next(binding for binding in projects.ProjectsApp.BINDINGS if binding.action == 'open_selected_in_slate')",
+        "print(binding.key)",
+        "print(binding.show)",
+      ].join("; "),
+    ],
+    {
+      cwd: realpathSync(process.cwd()),
+      encoding: "utf-8",
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  const lines = result.stdout.trim().split(/\r?\n/);
+  assert.equal(lines[0], "s");
+  assert.equal(lines[1], "True");
+});
+
 test("python projects app resolves cli path from the repo dist directory", () => {
   const result = spawnSync(
     "python3",
@@ -695,7 +722,7 @@ test("python projects app open-in-tab action invokes project open --tab", () => 
         "import ui.projects as projects",
         "app = projects.ProjectsApp('/tmp')",
         "calls = {}",
-        "def run_cli(self, args):",
+        "def run_cli(self, args, agent_command=None):",
         "    calls['args'] = args",
         "    return SimpleNamespace(returncode=0, stdout='', stderr='')",
         "def exit_app(self):",
@@ -733,7 +760,7 @@ test("python projects app open action invokes project open --current-session", (
         "import ui.projects as projects",
         "app = projects.ProjectsApp('/tmp')",
         "calls = {}",
-        "def run_cli(self, args):",
+        "def run_cli(self, args, agent_command=None):",
         "    calls['args'] = args",
         "    return SimpleNamespace(returncode=0, stdout='', stderr='')",
         "def exit_app(self):",
@@ -756,6 +783,119 @@ test("python projects app open action invokes project open --current-session", (
     JSON.parse(result.stdout.trim()),
     { args: ["project", "open", "frontend", "--current-session"], exited: true }
   );
+});
+
+test("python projects app Slate action invokes project open with a Slate override", () => {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import json",
+        "import sys",
+        "from types import MethodType, SimpleNamespace",
+        "sys.path.insert(0, 'python')",
+        "import ui.projects as projects",
+        "app = projects.ProjectsApp('/tmp')",
+        "calls = {}",
+        "def run_cli(self, args, agent_command=None):",
+        "    calls['args'] = args",
+        "    calls['agent'] = agent_command",
+        "    return SimpleNamespace(returncode=0, stdout='', stderr='')",
+        "def exit_app(self):",
+        "    calls['exited'] = True",
+        "app._selected_project = MethodType(lambda self: projects.ProjectInfo('frontend', '/tmp/frontend', '/tmp/frontend', '', '', None), app)",
+        "app._run_cli = MethodType(run_cli, app)",
+        "app.exit = MethodType(exit_app, app)",
+        "app.action_open_selected_in_slate()",
+        "print(json.dumps(calls, sort_keys=True))",
+      ].join('\n'),
+    ],
+    {
+      cwd: realpathSync(process.cwd()),
+      encoding: "utf-8",
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(
+    JSON.parse(result.stdout.trim()),
+    { agent: "slate", args: ["project", "open", "frontend", "--current-session"], exited: true }
+  );
+});
+
+test("python projects app appends a non-default agent when invoking the CLI", () => {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import json",
+        "import sys",
+        "from types import MethodType",
+        "sys.path.insert(0, 'python')",
+        "import ui.projects as projects",
+        "app = projects.ProjectsApp('/tmp', 'slate')",
+        "app._cli_path = MethodType(lambda self: '/tmp/cli.js', app)",
+        "calls = {}",
+        "def fake_run(cmd, cwd, capture_output, text):",
+        "    calls['cmd'] = cmd",
+        "    calls['cwd'] = cwd",
+        "    return type('Result', (), {'returncode': 0, 'stdout': '', 'stderr': ''})()",
+        "projects.subprocess.run = fake_run",
+        "open('/tmp/cli.js', 'w').close()",
+        "app._run_cli(['project', 'open', 'frontend', '--current-session'])",
+        "print(json.dumps(calls, sort_keys=True))",
+      ].join("\n"),
+    ],
+    {
+      cwd: realpathSync(process.cwd()),
+      encoding: "utf-8",
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout.trim()), {
+    cmd: ["node", "/tmp/cli.js", "project", "open", "frontend", "--current-session", "--agent", "slate"],
+    cwd: "/tmp",
+  });
+});
+
+test("python projects app can override the agent for a one-off CLI action", () => {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import json",
+        "import sys",
+        "from types import MethodType",
+        "sys.path.insert(0, 'python')",
+        "import ui.projects as projects",
+        "app = projects.ProjectsApp('/tmp')",
+        "app._cli_path = MethodType(lambda self: '/tmp/cli.js', app)",
+        "calls = {}",
+        "def fake_run(cmd, cwd, capture_output, text):",
+        "    calls['cmd'] = cmd",
+        "    calls['cwd'] = cwd",
+        "    return type('Result', (), {'returncode': 0, 'stdout': '', 'stderr': ''})()",
+        "projects.subprocess.run = fake_run",
+        "open('/tmp/cli.js', 'w').close()",
+        "app._run_cli(['project', 'open', 'frontend', '--current-session'], agent_command='slate')",
+        "print(json.dumps(calls, sort_keys=True))",
+      ].join('\n'),
+    ],
+    {
+      cwd: realpathSync(process.cwd()),
+      encoding: "utf-8",
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout.trim()), {
+    cmd: ["node", "/tmp/cli.js", "project", "open", "frontend", "--current-session", "--agent", "slate"],
+    cwd: "/tmp",
+  });
 });
 
 test("python load_projects reads v2 projects with multiple workspaces", () => {
@@ -951,7 +1091,7 @@ test("python projects app passes the selected branch directly when creating a wo
         "        pass",
         "app = projects.ProjectsApp('/tmp')",
         "calls = {}",
-        "def run_cli(self, args):",
+        "def run_cli(self, args, agent_command=None):",
         "    calls['args'] = args",
         "    return SimpleNamespace(returncode=0, stdout='', stderr='')",
         "def query_one(self, selector, *_args, **_kwargs):",
@@ -1090,7 +1230,7 @@ test("python projects app open action invokes workspace open when viewing worksp
         "import ui.projects as projects",
         "app = projects.ProjectsApp('/tmp')",
         "calls = {}",
-        "def run_cli(self, args):",
+        "def run_cli(self, args, agent_command=None):",
         "    calls['args'] = args",
         "    return SimpleNamespace(returncode=0, stdout='', stderr='')",
         "def exit_app(self):",
@@ -1117,6 +1257,50 @@ test("python projects app open action invokes workspace open when viewing worksp
   assert.deepEqual(
     JSON.parse(result.stdout.trim()),
     { args: ["workspace", "open", "frontend", "feature-one", "--current-session"], exited: true }
+  );
+});
+
+test("python projects app Slate action invokes workspace open with a Slate override", () => {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      [
+        "import json",
+        "import sys",
+        "from types import MethodType, SimpleNamespace",
+        "sys.path.insert(0, 'python')",
+        "import ui.projects as projects",
+        "app = projects.ProjectsApp('/tmp')",
+        "calls = {}",
+        "def run_cli(self, args, agent_command=None):",
+        "    calls['args'] = args",
+        "    calls['agent'] = agent_command",
+        "    return SimpleNamespace(returncode=0, stdout='', stderr='')",
+        "def exit_app(self):",
+        "    calls['exited'] = True",
+        "workspace = projects.WorkspaceInfo('feature-one', '/tmp/frontend/.latch/workspaces/feature-one', 'worktree', 'feature-one', False, None)",
+        "project = projects.ProjectInfo('frontend', '/tmp/frontend', '/tmp/frontend', '', '', None, 'root', [workspace])",
+        "app._mode = 'workspaces'",
+        "app._projects = [project]",
+        "app._active_project_alias = 'frontend'",
+        "app._selected_workspace = MethodType(lambda self: workspace, app)",
+        "app._run_cli = MethodType(run_cli, app)",
+        "app.exit = MethodType(exit_app, app)",
+        "app.action_open_selected_in_slate()",
+        "print(json.dumps(calls, sort_keys=True))",
+      ].join('\n'),
+    ],
+    {
+      cwd: realpathSync(process.cwd()),
+      encoding: "utf-8",
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(
+    JSON.parse(result.stdout.trim()),
+    { agent: "slate", args: ["workspace", "open", "frontend", "feature-one", "--current-session"], exited: true }
   );
 });
 
@@ -1478,6 +1662,37 @@ test("cli workspaces opens the picker in a left tmux pane", () => {
   });
 });
 
+test("cli workspaces forwards an explicit agent to the picker", () => {
+  withTempDir((dir) => {
+    const binDir = join(dir, "bin");
+    const tmpRoot = join(dir, "tmp");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(tmpRoot, { recursive: true });
+
+    const tmuxLog = join(dir, "tmux.log");
+    const tmuxStub = join(binDir, "tmux");
+    writeFileSync(
+      tmuxStub,
+      "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$LATCH_TMUX_LOG\"\nif [ \"$1\" = \"split-window\" ]; then printf '%s\\n' '%42'; fi\nexit 0\n"
+    );
+    chmodSync(tmuxStub, 0o755);
+
+    const env = {
+      ...process.env,
+      TMUX: "1",
+      TMPDIR: tmpRoot,
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      LATCH_TMUX_LOG: tmuxLog,
+    };
+
+    const result = runCli(["workspaces", "--agent", "slate"], { env });
+    assert.equal(result.status, 0);
+
+    const logged = readFileSync(tmuxLog, "utf-8");
+    assert.match(logged, /projects\.py" .*"slate"/);
+  });
+});
+
 test("cli workspaces opens to the left of the remembered Claude pane across cwd changes", () => {
   withTempDir((dir) => {
     const binDir = join(dir, "bin");
@@ -1642,6 +1857,51 @@ test("cli project open --current-session respawns the stored target pane", () =>
     assert.match(logged, /respawn-pane -k -t %target -c /);
     assert.match(logged, /python3 ".*loading\.py" "claude"/);
     assert.match(logged, /select-pane -t %target/);
+  });
+});
+
+test("cli project open --current-session accepts a non-default agent", () => {
+  withTempDir((dir) => {
+    const configHome = join(dir, "config");
+    const binDir = join(dir, "bin");
+    const tmpRoot = join(dir, "tmp");
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(tmpRoot, { recursive: true });
+
+    const tmuxLog = join(dir, "tmux.log");
+    const tmuxStub = join(binDir, "tmux");
+    writeFileSync(
+      tmuxStub,
+      "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$LATCH_TMUX_LOG\"\nif [ \"$1\" = \"display-message\" ] && [ \"$4\" = '#{pane_id}' ]; then printf '%s\\n' '%%main'; fi\nif [ \"$1\" = \"display-message\" ] && [ \"$4\" = '#{window_id}' ]; then printf '%s\\n' '@7'; fi\nexit 0\n"
+    );
+    chmodSync(tmuxStub, 0o755);
+
+    const projectPath = projectFixturePath(dir, "frontend");
+    addProject("frontend", projectPath, { configPath: configPathFor(configHome) });
+
+    const repoCwd = realpathSync(process.cwd());
+    const targetHash = createHash("sha256").update(`${repoCwd}:project-target`).digest("hex").slice(0, 12);
+    const latchTmp = join(tmpRoot, "latch");
+    mkdirSync(latchTmp, { recursive: true });
+    writeFileSync(join(latchTmp, `${targetHash}-project-target-pane.txt`), "%target");
+
+    const env = {
+      ...process.env,
+      TMUX: "1",
+      TMPDIR: tmpRoot,
+      XDG_CONFIG_HOME: configHome,
+      TERM_PROGRAM: "",
+      GHOSTTY_BIN_DIR: "",
+      GHOSTTY_RESOURCES_DIR: "",
+      PATH: `${binDir}:${process.env.PATH ?? ""}`,
+      LATCH_TMUX_LOG: tmuxLog,
+    };
+
+    const result = runCli(["project", "open", "frontend", "--current-session", "--agent", "slate"], { env, cwd: repoCwd });
+    assert.equal(result.status, 0);
+
+    const logged = readFileSync(tmuxLog, "utf-8");
+    assert.match(logged, /python3 ".*loading\.py" "slate"/);
   });
 });
 
