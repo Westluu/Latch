@@ -70,6 +70,7 @@ const LATCH_WORKSPACES_DIR = ".latch/workspaces";
 
 export const RESERVED_PROJECT_ALIASES = new Set([
   "claude",
+  "slate",
   "open",
   "toggle",
   "chat",
