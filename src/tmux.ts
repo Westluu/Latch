@@ -287,11 +287,16 @@ export function openAgentInTargetPane(originCwd: string, projectCwd: string, age
     launchWithAgent(projectCwd, agentCommand);
   }
 
-  saveSidecarTargetPaneId(originCwd, "", targetPane);
-  saveAgentCommand(originCwd, agentCommand);
+  const sessionName = getPaneSession(targetPane) || getCurrentTmuxSession();
+  const targetFlag = sessionName ? `-t ${sessionName}` : "";
+  const loadingCmd = pythonUiCommand("loading.py", agentCommand);
+  const windowId = run(
+    `tmux new-window -P -F '#{window_id}' ${targetFlag} -c '${projectCwd}' '${loadingCmd}'`
+  );
 
-  run(`tmux respawn-pane -k -t ${targetPane} -c '${projectCwd}' '${pythonUiCommand("loading.py", agentCommand)}'`);
-  run(`tmux select-pane -t ${targetPane}`);
+  if (windowId) saveAgentCommandForScope(`tmux-window:${windowId}`, agentCommand);
+
+  run(`tmux select-window -t ${windowId}`);
   process.exit(0);
 }
 
