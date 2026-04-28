@@ -15,6 +15,13 @@ const integrations: Record<SupportedTerminal, TerminalIntegration> = {
   unknown: unknownTerminalIntegration,
 };
 
+const supportedIntegrations = [
+  ghosttyIntegration,
+  iterm2Integration,
+  kittyIntegration,
+  appleTerminalIntegration,
+] as const;
+
 function currentIntegration(): TerminalIntegration {
   return integrations[detectTerminal()];
 }
@@ -34,6 +41,15 @@ export function hasTerminalChatKeybinding(): boolean {
   return currentIntegration().hasChatKeybinding();
 }
 
+export function hasAnyTerminalKeybinding(): boolean {
+  return supportedIntegrations.some(
+    (integration) =>
+      integration.hasPrimaryKeybinding()
+      || integration.hasWorkspacesKeybinding()
+      || integration.hasChatKeybinding()
+  );
+}
+
 export function addTerminalKeybinding(): string {
   return currentIntegration().addPrimaryKeybinding();
 }
@@ -47,8 +63,7 @@ export function addTerminalChatKeybinding(): string {
 }
 
 export function removeTerminalKeybinding(): void {
-  ghosttyIntegration.removeKeybindings();
-  iterm2Integration.removeKeybindings();
-  kittyIntegration.removeKeybindings();
-  appleTerminalIntegration.removeKeybindings();
+  for (const integration of supportedIntegrations) {
+    integration.removeKeybindings();
+  }
 }

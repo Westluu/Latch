@@ -1,96 +1,243 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TerminalIntegration } from "./types.js";
+import {
+  formatBindingList,
+  formatManualBindings,
+  getTerminalBinding,
+  type TerminalBindingId,
+} from "./shared.js";
 
 const ITERM2_PLIST = join(homedir(), "Library", "Preferences", "com.googlecode.iterm2.plist");
-const TOGGLE_KEY = "0x65-0x100000-0xe";
-const CHAT_KEY = "0x73-0x100000-0x1";
-const WORKSPACES_KEY = "0x70-0x100000-0x23";
+const LATCH_MANAGED_KEY = "LatchManagedGlobalKeyMap";
+const ITERM2_ESCAPE_SEQUENCE_ACTION = 11;
 
-function readPrefs(): any | null {
-  if (!existsSync(ITERM2_PLIST)) return null;
+const iterm2Bindings = {
+  primary: { key: "0x65-0x100000-0xe", text: "e" },
+  workspaces: { key: "0x70-0x100000-0x23", text: "p" },
+  chat: { key: "0x73-0x100000-0x1", text: "s" },
+} as const satisfies Record<TerminalBindingId, { key: string; text: string }>;
+
+type JsonObject = Record<string, unknown>;
+
+type Iterm2BindingUpdateResult = {
+  prefs: JsonObject;
+  added: TerminalBindingId[];
+  conflicts: TerminalBindingId[];
+};
+
+function isRecord(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function cloneRecord<T>(value: T): T {
+  return structuredClone(value);
+}
+
+function ensureRecord(parent: JsonObject, key: string): JsonObject {
+  const existing = parent[key];
+  if (isRecord(existing)) {
+    return existing;
+  }
+  const created: JsonObject = {};
+  parent[key] = created;
+  return created;
+}
+
+function hasKeys(record: JsonObject): boolean {
+  return Object.keys(record).length > 0;
+}
+
+export function makeIterm2Binding(text: string): JsonObject {
+  return {
+    Action: ITERM2_ESCAPE_SEQUENCE_ACTION,
+    Label: "Latch",
+    Text: text,
+    Version: 1,
+  };
+}
+
+export function isExpectedIterm2Binding(value: unknown, text: string): boolean {
+  if (!isRecord(value)) return false;
+  return value.Action === ITERM2_ESCAPE_SEQUENCE_ACTION && value.Text === text;
+}
+
+function readPrefs(): JsonObject | null {
+  if (process.platform !== "darwin" || !existsSync(ITERM2_PLIST)) return null;
   try {
-    const json = execSync(`plutil -convert json "${ITERM2_PLIST}" -o -`, { encoding: "utf-8" });
-    return JSON.parse(json);
+    const json = execFileSync("plutil", ["-convert", "json", ITERM2_PLIST, "-o", "-"], {
+      encoding: "utf-8",
+    });
+    const parsed = JSON.parse(json);
+    return isRecord(parsed) ? parsed : {};
   } catch {
     return null;
   }
 }
 
-function writePrefs(prefs: any): void {
-  const tmp = join(tmpdir(), "latch-iterm2.json");
-  writeFileSync(tmp, JSON.stringify(prefs));
+function writePrefs(prefs: JsonObject): void {
+  const tmp = join(tmpdir(), `latch-iterm2-${process.pid}.json`);
+  writeFileSync(tmp, JSON.stringify(prefs, null, 2));
   try {
-    execSync(`plutil -convert binary1 "${tmp}" -o "${ITERM2_PLIST}"`);
+    execFileSync("plutil", ["-convert", "binary1", tmp, "-o", ITERM2_PLIST]);
   } finally {
-    try { unlinkSync(tmp); } catch {}
+    try {
+      unlinkSync(tmp);
+    } catch {}
   }
+}
+
+function manualInstructions(bindingIds: TerminalBindingId[]): string {
+  return `Preferences > Keys > Key Bindings: ${formatManualBindings(
+    bindingIds,
+    (binding) => `${binding.shortcut} -> Send Escape Sequence -> ${binding.letter}`
+  )}. Quit and reopen iTerm2.`;
+}
+
+function formatResult(result: Iterm2BindingUpdateResult, label: string): string {
+  if (result.added.length === 0 && result.conflicts.length === 0) {
+    return `iTerm2 ${label} already configured.`;
+  }
+
+  if (result.conflicts.length === 0) {
+    return result.added.length === 3
+      ? "iTerm2 shortcuts updated. Quit and reopen iTerm2 to apply."
+      : `iTerm2 ${formatBindingList(result.added)} shortcut${result.added.length > 1 ? "s" : ""} added. Quit and reopen iTerm2 to apply.`;
+  }
+
+  const conflictMessage = `Left existing ${formatBindingList(result.conflicts)} shortcut${result.conflicts.length > 1 ? "s" : ""} unchanged. ${manualInstructions(result.conflicts)}`;
+  if (result.added.length === 0) {
+    return `iTerm2 could not update ${formatBindingList(result.conflicts)} automatically. ${manualInstructions(result.conflicts)}`;
+  }
+
+  return `iTerm2 added ${formatBindingList(result.added)}. ${conflictMessage}`;
+}
+
+export function applyIterm2Bindings(
+  prefs: JsonObject,
+  bindingIds: TerminalBindingId[]
+): Iterm2BindingUpdateResult {
+  const nextPrefs = cloneRecord(prefs);
+  const globalKeyMap = ensureRecord(nextPrefs, "GlobalKeyMap");
+  const managedKeyMap = ensureRecord(nextPrefs, LATCH_MANAGED_KEY);
+  const added = new Set<TerminalBindingId>();
+  const conflicts = new Set<TerminalBindingId>();
+
+  for (const bindingId of bindingIds) {
+    const spec = iterm2Bindings[bindingId];
+    const existing = globalKeyMap[spec.key];
+
+    if (isExpectedIterm2Binding(existing, spec.text)) {
+      continue;
+    }
+
+    if (existing !== undefined) {
+      conflicts.add(bindingId);
+      continue;
+    }
+
+    globalKeyMap[spec.key] = makeIterm2Binding(spec.text);
+    managedKeyMap[spec.key] = true;
+    added.add(bindingId);
+  }
+
+  if (!hasKeys(managedKeyMap)) {
+    delete nextPrefs[LATCH_MANAGED_KEY];
+  }
+
+  return {
+    prefs: nextPrefs,
+    added: [...added],
+    conflicts: [...conflicts],
+  };
+}
+
+export function removeManagedIterm2Bindings(prefs: JsonObject): JsonObject {
+  const nextPrefs = cloneRecord(prefs);
+  const globalKeyMap = isRecord(nextPrefs.GlobalKeyMap) ? nextPrefs.GlobalKeyMap : null;
+  const managedKeyMap = isRecord(nextPrefs[LATCH_MANAGED_KEY]) ? nextPrefs[LATCH_MANAGED_KEY] : null;
+
+  if (!globalKeyMap) {
+    return nextPrefs;
+  }
+
+  for (const bindingId of Object.keys(iterm2Bindings) as TerminalBindingId[]) {
+    const spec = iterm2Bindings[bindingId];
+    const isManaged = !!managedKeyMap?.[spec.key];
+    const isLegacyExactLatchEntry = isExpectedIterm2Binding(globalKeyMap[spec.key], spec.text);
+    if ((isManaged || !managedKeyMap) && isLegacyExactLatchEntry) {
+      delete globalKeyMap[spec.key];
+    }
+    if (managedKeyMap) {
+      delete managedKeyMap[spec.key];
+    }
+  }
+
+  if (managedKeyMap && !hasKeys(managedKeyMap)) {
+    delete nextPrefs[LATCH_MANAGED_KEY];
+  }
+
+  return nextPrefs;
+}
+
+function updateBindings(bindingIds: TerminalBindingId[], label: string): string {
+  const prefs = readPrefs();
+  if (!prefs) {
+    return `Could not update iTerm2 automatically. ${manualInstructions(bindingIds)}`;
+  }
+
+  try {
+    const result = applyIterm2Bindings(prefs, bindingIds);
+    writePrefs(result.prefs);
+    return formatResult(result, label);
+  } catch {
+    return `Could not update iTerm2 automatically. ${manualInstructions(bindingIds)}`;
+  }
+}
+
+function hasBinding(bindingId: TerminalBindingId): boolean {
+  const prefs = readPrefs();
+  if (!prefs) return false;
+  const globalKeyMap = isRecord(prefs.GlobalKeyMap) ? prefs.GlobalKeyMap : null;
+  if (!globalKeyMap) return false;
+  const spec = iterm2Bindings[bindingId];
+  return isExpectedIterm2Binding(globalKeyMap[spec.key], spec.text);
 }
 
 export const iterm2Integration: TerminalIntegration = {
   terminal: "iterm2",
 
   hasPrimaryKeybinding(): boolean {
-    const prefs = readPrefs();
-    return !!prefs?.GlobalKeyMap?.[TOGGLE_KEY];
+    return hasBinding("primary");
   },
 
   hasWorkspacesKeybinding(): boolean {
-    const prefs = readPrefs();
-    return !!prefs?.GlobalKeyMap?.[WORKSPACES_KEY];
+    return hasBinding("workspaces");
   },
 
   hasChatKeybinding(): boolean {
-    const prefs = readPrefs();
-    return !!prefs?.GlobalKeyMap?.[CHAT_KEY];
+    return hasBinding("chat");
   },
 
   addPrimaryKeybinding(): string {
-    const prefs = readPrefs();
-    if (!prefs) {
-      return "Could not update iTerm2 automatically.\n  Preferences → Keys → Key Bindings → +\n  Shortcut: CMD+E | Action: Send Escape Sequence | Esc+: e";
-    }
-
-    try {
-      if (!prefs.GlobalKeyMap) prefs.GlobalKeyMap = {};
-      prefs.GlobalKeyMap[TOGGLE_KEY] = { Action: 11, Text: "e" };
-      prefs.GlobalKeyMap[WORKSPACES_KEY] = { Action: 11, Text: "p" };
-      prefs.GlobalKeyMap[CHAT_KEY] = { Action: 11, Text: "s" };
-      writePrefs(prefs);
-      return "iTerm2 key binding added. Quit and reopen iTerm2 to apply.";
-    } catch {
-      return "Could not update iTerm2 automatically.\n  Preferences → Keys → Key Bindings → +\n  Shortcut: CMD+E | Action: Send Escape Sequence | Esc+: e";
-    }
+    return updateBindings(["primary", "workspaces", "chat"], getTerminalBinding("primary").label);
   },
 
   addWorkspacesKeybinding(): string {
-    const prefs = readPrefs();
-    if (!prefs) return "Could not update iTerm2 automatically.";
-    if (!prefs.GlobalKeyMap) prefs.GlobalKeyMap = {};
-    prefs.GlobalKeyMap[WORKSPACES_KEY] = { Action: 11, Text: "p" };
-    writePrefs(prefs);
-    return "iTerm2 CMD+P keybinding added. Restart iTerm2 to apply.";
+    return updateBindings(["workspaces"], getTerminalBinding("workspaces").label);
   },
 
   addChatKeybinding(): string {
-    const prefs = readPrefs();
-    if (!prefs) return "Could not update iTerm2 automatically.";
-    if (!prefs.GlobalKeyMap) prefs.GlobalKeyMap = {};
-    prefs.GlobalKeyMap[CHAT_KEY] = { Action: 11, Text: "s" };
-    writePrefs(prefs);
-    return "iTerm2 CMD+S keybinding added. Restart iTerm2 to apply.";
+    return updateBindings(["chat"], getTerminalBinding("chat").label);
   },
 
   removeKeybindings(): void {
     const prefs = readPrefs();
-    if (!prefs?.GlobalKeyMap) return;
+    if (!prefs) return;
     try {
-      delete prefs.GlobalKeyMap[TOGGLE_KEY];
-      delete prefs.GlobalKeyMap[WORKSPACES_KEY];
-      delete prefs.GlobalKeyMap[CHAT_KEY];
-      writePrefs(prefs);
+      writePrefs(removeManagedIterm2Bindings(prefs));
     } catch {}
   },
 };
