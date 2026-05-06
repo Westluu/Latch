@@ -3,28 +3,39 @@ import { existsSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TerminalIntegration } from "./types.js";
-import {
-  formatBindingList,
-  formatManualBindings,
-  getTerminalBinding,
-  type TerminalBindingId,
-} from "./shared.js";
+import { getTerminalBinding, type TerminalBindingId } from "./shared.js";
 
 const APPLE_TERMINAL_PLIST = join(homedir(), "Library", "Preferences", "com.apple.Terminal.plist");
 const LATCH_MANAGED_KEY = "LatchManagedAppleTerminalKeyBindings";
+const OPTION_AS_META_KEY = "useOptionAsMetaKey";
 
 const appleTerminalBindings = {
-  primary: { key: "@0065", value: "\\033e" },
-  workspaces: { key: "@0070", value: "\\033p" },
-  chat: { key: "@0073", value: "\\033s" },
-} as const satisfies Record<TerminalBindingId, { key: string; value: string }>;
+  primary: { key: "@$0065", value: "\\033e", shortcut: "CMD+SHIFT+E" },
+  workspaces: { key: "@$0070", value: "\\033p", shortcut: "CMD+SHIFT+P" },
+  chat: { key: "@$0073", value: "\\033s", shortcut: "CMD+SHIFT+S" },
+} as const satisfies Record<TerminalBindingId, { key: string; value: string; shortcut: string }>;
+
+const legacyAppleTerminalBindings = [
+  { key: "@0065", value: "\\033e" },
+  { key: "@0070", value: "\\033p" },
+  { key: "@0073", value: "\\033s" },
+  { key: "^0065", value: "\\033e" },
+  { key: "^0070", value: "\\033p" },
+  { key: "^0073", value: "\\033s" },
+  { key: "$0065", value: "\\033e" },
+  { key: "$0070", value: "\\033p" },
+  { key: "$0073", value: "\\033s" },
+  { key: "F704", value: "\\033e" },
+  { key: "F705", value: "\\033p" },
+  { key: "F706", value: "\\033s" },
+] as const;
 
 type JsonObject = Record<string, unknown>;
 
 type AppleTerminalBindingUpdateResult = {
   prefs: JsonObject;
   added: TerminalBindingId[];
-  conflicts: TerminalBindingId[];
+  overwritten: TerminalBindingId[];
   profiles: string[];
 };
 
@@ -48,6 +59,13 @@ function ensureRecord(parent: JsonObject, key: string): JsonObject {
 
 function hasKeys(record: JsonObject): boolean {
   return Object.keys(record).length > 0;
+}
+
+function deleteIfEmptyRecord(parent: JsonObject, key: string): void {
+  const value = parent[key];
+  if (isRecord(value) && !hasKeys(value)) {
+    delete parent[key];
+  }
 }
 
 function readPrefs(): JsonObject | null {
@@ -103,6 +121,17 @@ function getProfileBindingMap(windowSettings: JsonObject, profile: string, creat
   return created;
 }
 
+function getProfileSettings(windowSettings: JsonObject, profile: string, create: boolean): JsonObject | null {
+  const profileSettings = windowSettings[profile];
+  if (isRecord(profileSettings)) {
+    return profileSettings;
+  }
+  if (!create) return null;
+  const created: JsonObject = {};
+  windowSettings[profile] = created;
+  return created;
+}
+
 function getManagedProfiles(prefs: JsonObject, create: boolean): JsonObject | null {
   const existing = prefs[LATCH_MANAGED_KEY];
   if (isRecord(existing)) {
@@ -114,6 +143,34 @@ function getManagedProfiles(prefs: JsonObject, create: boolean): JsonObject | nu
   return created;
 }
 
+function restoreManagedOptionMeta(profileSettings: JsonObject, managedProfile: JsonObject): void {
+  const managedOptionValue = managedProfile[OPTION_AS_META_KEY];
+  if (managedOptionValue === undefined) return;
+  if (profileSettings[OPTION_AS_META_KEY] === true || profileSettings[OPTION_AS_META_KEY] === 1) {
+    if (managedOptionValue === "__ABSENT__") {
+      delete profileSettings[OPTION_AS_META_KEY];
+    } else {
+      profileSettings[OPTION_AS_META_KEY] = managedOptionValue;
+    }
+  }
+  delete managedProfile[OPTION_AS_META_KEY];
+}
+
+function restoreManagedBindings(bindingMap: JsonObject | null, managedProfile: JsonObject, bindings: readonly { key: string; value: string }[]): void {
+  if (!bindingMap) return;
+  for (const binding of bindings) {
+    const managedEntry = managedProfile[binding.key];
+    if (managedEntry !== undefined && bindingMap[binding.key] === binding.value) {
+      if (managedEntry === true) {
+        delete bindingMap[binding.key];
+      } else {
+        bindingMap[binding.key] = managedEntry;
+      }
+    }
+    delete managedProfile[binding.key];
+  }
+}
+
 export function applyAppleTerminalBindings(
   prefs: JsonObject,
   bindingIds: TerminalBindingId[]
@@ -121,17 +178,21 @@ export function applyAppleTerminalBindings(
   const nextPrefs = cloneRecord(prefs);
   const profiles = getAppleTerminalTargetProfiles(nextPrefs);
   if (profiles.length === 0) {
-    return { prefs: nextPrefs, added: [], conflicts: [...bindingIds], profiles: [] };
+    return { prefs: nextPrefs, added: [], overwritten: [], profiles: [] };
   }
 
   const windowSettings = ensureRecord(nextPrefs, "Window Settings");
   const managedProfiles = getManagedProfiles(nextPrefs, true)!;
   const added = new Set<TerminalBindingId>();
-  const conflicts = new Set<TerminalBindingId>();
+  const overwritten = new Set<TerminalBindingId>();
 
   for (const profile of profiles) {
-    const bindingMap = getProfileBindingMap(windowSettings, profile, true)!;
+    const profileSettings = getProfileSettings(windowSettings, profile, true)!;
     const managedProfile = ensureRecord(managedProfiles, profile);
+
+    restoreManagedOptionMeta(profileSettings, managedProfile);
+    const bindingMap = getProfileBindingMap(windowSettings, profile, true)!;
+    restoreManagedBindings(bindingMap, managedProfile, legacyAppleTerminalBindings);
 
     for (const bindingId of bindingIds) {
       const spec = appleTerminalBindings[bindingId];
@@ -140,7 +201,9 @@ export function applyAppleTerminalBindings(
         continue;
       }
       if (existing !== undefined) {
-        conflicts.add(bindingId);
+        managedProfile[spec.key] = structuredClone(existing);
+        bindingMap[spec.key] = spec.value;
+        overwritten.add(bindingId);
         continue;
       }
       bindingMap[spec.key] = spec.value;
@@ -148,6 +211,7 @@ export function applyAppleTerminalBindings(
       added.add(bindingId);
     }
 
+    deleteIfEmptyRecord(profileSettings, "keyMapBoundKeys");
     if (!hasKeys(managedProfile)) {
       delete managedProfiles[profile];
     }
@@ -160,7 +224,7 @@ export function applyAppleTerminalBindings(
   return {
     prefs: nextPrefs,
     added: [...added],
-    conflicts: [...conflicts],
+    overwritten: [...overwritten],
     profiles,
   };
 }
@@ -174,28 +238,23 @@ export function removeManagedAppleTerminalBindings(prefs: JsonObject): JsonObjec
     return nextPrefs;
   }
 
+  const allBindings = [
+    ...Object.values(appleTerminalBindings),
+    ...legacyAppleTerminalBindings,
+  ];
+
   for (const [profile, managedValue] of Object.entries(managedProfiles)) {
     if (!isRecord(managedValue)) {
       delete managedProfiles[profile];
       continue;
     }
 
-    const bindingMap = getProfileBindingMap(windowSettings, profile, false);
-    if (bindingMap) {
-      for (const bindingId of Object.keys(appleTerminalBindings) as TerminalBindingId[]) {
-        const spec = appleTerminalBindings[bindingId];
-        if (managedValue[spec.key] && bindingMap[spec.key] === spec.value) {
-          delete bindingMap[spec.key];
-        }
-        delete managedValue[spec.key];
-      }
-
-      if (!hasKeys(bindingMap)) {
-        const profileSettings = windowSettings[profile];
-        if (isRecord(profileSettings)) {
-          delete profileSettings.keyMapBoundKeys;
-        }
-      }
+    const profileSettings = getProfileSettings(windowSettings, profile, false);
+    if (profileSettings) {
+      restoreManagedOptionMeta(profileSettings, managedValue);
+      const bindingMap = getProfileBindingMap(windowSettings, profile, false);
+      restoreManagedBindings(bindingMap, managedValue, allBindings);
+      deleteIfEmptyRecord(profileSettings, "keyMapBoundKeys");
     }
 
     if (!hasKeys(managedValue)) {
@@ -210,39 +269,45 @@ export function removeManagedAppleTerminalBindings(prefs: JsonObject): JsonObjec
   return nextPrefs;
 }
 
-function manualInstructions(bindingIds: TerminalBindingId[]): string {
-  return `Settings > Profiles > Keyboard: ${formatManualBindings(
-    bindingIds,
-    (binding) => `${binding.shortcut} -> Send string to shell -> ${binding.escapeSequence}`
-  )} on the default and startup profiles. Quit and reopen Terminal.`;
+function manualInstructions(): string {
+  return `Settings > Profiles > Keyboard: create ${(["primary", "workspaces", "chat"] as TerminalBindingId[]).map((bindingId) => {
+    const binding = appleTerminalBindings[bindingId];
+    const descriptor = getTerminalBinding(bindingId);
+    return `${binding.shortcut} -> Send string to shell -> ${descriptor.escapeSequence}`;
+  }).join("; ")} on the default and startup profiles. Quit and reopen Terminal.`;
+}
+
+function formatAppleBindingList(bindingIds: TerminalBindingId[]): string {
+  return bindingIds.map((bindingId) => appleTerminalBindings[bindingId].shortcut).join(", ");
 }
 
 function formatResult(result: AppleTerminalBindingUpdateResult): string {
   if (result.profiles.length === 0) {
-    return `Apple Terminal detected, but automatic update failed. ${manualInstructions(result.conflicts)}`;
+    return `Apple Terminal detected, but automatic update failed. ${manualInstructions()}`;
   }
 
-  if (result.added.length === 0 && result.conflicts.length === 0) {
-    return "Apple Terminal shortcuts already configured.";
+  if (result.added.length === 0 && result.overwritten.length === 0) {
+    return "Apple Terminal Command-Shift shortcuts already configured.";
   }
 
-  if (result.conflicts.length === 0) {
+  if (result.overwritten.length === 0) {
     return result.added.length === 3
-      ? "Apple Terminal shortcuts updated for the default and startup profiles. Quit and reopen Terminal to apply."
-      : `Apple Terminal ${formatBindingList(result.added)} shortcut${result.added.length > 1 ? "s" : ""} added for the default and startup profiles. Quit and reopen Terminal to apply.`;
+      ? "Apple Terminal Command-Shift shortcuts updated for the default and startup profiles. Quit and reopen Terminal to apply."
+      : `Apple Terminal ${formatAppleBindingList(result.added)} shortcut${result.added.length > 1 ? "s" : ""} added for the default and startup profiles. Quit and reopen Terminal to apply.`;
   }
 
+  const overwriteMessage = `Overwrote existing ${formatAppleBindingList(result.overwritten)} shortcut${result.overwritten.length > 1 ? "s" : ""} for the default and startup profiles. Quit and reopen Terminal to apply.`;
   if (result.added.length === 0) {
-    return `Apple Terminal left existing ${formatBindingList(result.conflicts)} shortcut${result.conflicts.length > 1 ? "s" : ""} unchanged. ${manualInstructions(result.conflicts)}`;
+    return `Apple Terminal ${overwriteMessage}`;
   }
 
-  return `Apple Terminal added ${formatBindingList(result.added)} for the default and startup profiles. Left existing ${formatBindingList(result.conflicts)} shortcut${result.conflicts.length > 1 ? "s" : ""} unchanged. ${manualInstructions(result.conflicts)}`;
+  return `Apple Terminal added ${formatAppleBindingList(result.added)} for the default and startup profiles. ${overwriteMessage}`;
 }
 
 function updateBindings(bindingIds: TerminalBindingId[]): string {
   const prefs = readPrefs();
   if (!prefs) {
-    return `Could not update Apple Terminal automatically. ${manualInstructions(bindingIds)}`;
+    return `Could not update Apple Terminal automatically. ${manualInstructions()}`;
   }
 
   try {
@@ -253,7 +318,7 @@ function updateBindings(bindingIds: TerminalBindingId[]): string {
     writePrefs(result.prefs);
     return formatResult(result);
   } catch {
-    return `Could not update Apple Terminal automatically. ${manualInstructions(bindingIds)}`;
+    return `Could not update Apple Terminal automatically. ${manualInstructions()}`;
   }
 }
 

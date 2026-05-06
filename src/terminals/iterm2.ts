@@ -25,7 +25,7 @@ type JsonObject = Record<string, unknown>;
 type Iterm2BindingUpdateResult = {
   prefs: JsonObject;
   added: TerminalBindingId[];
-  conflicts: TerminalBindingId[];
+  overwritten: TerminalBindingId[];
 };
 
 function isRecord(value: unknown): value is JsonObject {
@@ -97,22 +97,22 @@ function manualInstructions(bindingIds: TerminalBindingId[]): string {
 }
 
 function formatResult(result: Iterm2BindingUpdateResult, label: string): string {
-  if (result.added.length === 0 && result.conflicts.length === 0) {
+  if (result.added.length === 0 && result.overwritten.length === 0) {
     return `iTerm2 ${label} already configured.`;
   }
 
-  if (result.conflicts.length === 0) {
+  if (result.overwritten.length === 0) {
     return result.added.length === 3
       ? "iTerm2 shortcuts updated. Quit and reopen iTerm2 to apply."
       : `iTerm2 ${formatBindingList(result.added)} shortcut${result.added.length > 1 ? "s" : ""} added. Quit and reopen iTerm2 to apply.`;
   }
 
-  const conflictMessage = `Left existing ${formatBindingList(result.conflicts)} shortcut${result.conflicts.length > 1 ? "s" : ""} unchanged. ${manualInstructions(result.conflicts)}`;
+  const overwriteMessage = `Overwrote existing ${formatBindingList(result.overwritten)} shortcut${result.overwritten.length > 1 ? "s" : ""}. Quit and reopen iTerm2 to apply.`;
   if (result.added.length === 0) {
-    return `iTerm2 could not update ${formatBindingList(result.conflicts)} automatically. ${manualInstructions(result.conflicts)}`;
+    return `iTerm2 ${overwriteMessage}`;
   }
 
-  return `iTerm2 added ${formatBindingList(result.added)}. ${conflictMessage}`;
+  return `iTerm2 added ${formatBindingList(result.added)}. ${overwriteMessage}`;
 }
 
 export function applyIterm2Bindings(
@@ -123,7 +123,7 @@ export function applyIterm2Bindings(
   const globalKeyMap = ensureRecord(nextPrefs, "GlobalKeyMap");
   const managedKeyMap = ensureRecord(nextPrefs, LATCH_MANAGED_KEY);
   const added = new Set<TerminalBindingId>();
-  const conflicts = new Set<TerminalBindingId>();
+  const overwritten = new Set<TerminalBindingId>();
 
   for (const bindingId of bindingIds) {
     const spec = iterm2Bindings[bindingId];
@@ -134,7 +134,9 @@ export function applyIterm2Bindings(
     }
 
     if (existing !== undefined) {
-      conflicts.add(bindingId);
+      managedKeyMap[spec.key] = structuredClone(existing);
+      globalKeyMap[spec.key] = makeIterm2Binding(spec.text);
+      overwritten.add(bindingId);
       continue;
     }
 
@@ -150,7 +152,7 @@ export function applyIterm2Bindings(
   return {
     prefs: nextPrefs,
     added: [...added],
-    conflicts: [...conflicts],
+    overwritten: [...overwritten],
   };
 }
 
@@ -165,9 +167,16 @@ export function removeManagedIterm2Bindings(prefs: JsonObject): JsonObject {
 
   for (const bindingId of Object.keys(iterm2Bindings) as TerminalBindingId[]) {
     const spec = iterm2Bindings[bindingId];
-    const isManaged = !!managedKeyMap?.[spec.key];
+    const managedEntry = managedKeyMap?.[spec.key];
+    const isManaged = managedEntry !== undefined;
     const isLegacyExactLatchEntry = isExpectedIterm2Binding(globalKeyMap[spec.key], spec.text);
-    if ((isManaged || !managedKeyMap) && isLegacyExactLatchEntry) {
+    if (isManaged && isLegacyExactLatchEntry) {
+      if (managedEntry === true) {
+        delete globalKeyMap[spec.key];
+      } else {
+        globalKeyMap[spec.key] = managedEntry;
+      }
+    } else if (!managedKeyMap && isLegacyExactLatchEntry) {
       delete globalKeyMap[spec.key];
     }
     if (managedKeyMap) {
