@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from latch import theme
 from latch.session_store import Message, SessionInfo
+from rich.text import Text
 from textual.binding import Binding
 from textual.widgets import ListItem, ListView, Static
 
@@ -117,20 +118,39 @@ class SessionListItem(ListItem):
         label = session.label
         if len(label) > 28:
             label = label[:25] + "..."
-        dur = format_duration(session.duration_secs)
-        size = format_size(session.file_size)
-        parts = []
-        if dur:
-            parts.append(f"[{theme.TEXT_SUBTLE}]{dur}[/]")
-        if size:
-            parts.append(f"[{theme.TEXT_FAINT}]{size}[/]")
-        stats = "  " + "  ".join(parts) if parts else ""
-        super().__init__(Static(f"[{theme.WARNING}]\u25c6[/] {label}{stats}"))
+        self._duration_text = format_duration(session.duration_secs)
+        self._size_text = format_size(session.file_size)
+
+        branch = session.branch or ""
+        if len(branch) > 20:
+            branch = "..." + branch[-17:]
+        self._branch_text = branch
+        self._label_text = f"\u25c6 {label}"
+        self._content = Static(self._render_text(selected=False))
+        super().__init__(self._content)
 
     def set_selected(self, selected: bool) -> None:
-        static = self.query_one(Static)
-        static.styles.background = theme.SELECTION_BG if selected else "transparent"
-        static.styles.color = theme.TEXT_BRIGHT if selected else theme.TEXT_SOFT
+        background = theme.SELECTION_BG if selected else "transparent"
+        self.styles.background = background
+        self._content.styles.background = background
+        self._content.update(self._render_text(selected))
+
+    def _render_text(self, selected: bool) -> Text:
+        text = Text()
+        text.append("\u25c6 ", style=theme.WARNING)
+        text.append(self._label_text[2:], style=theme.TEXT_BRIGHT if selected else theme.TEXT_SOFT)
+        if self._duration_text:
+            text.append("  ")
+            text.append(self._duration_text, style=theme.TEXT_SUBTLE)
+        if self._size_text:
+            text.append("  ")
+            text.append(self._size_text, style=theme.TEXT_FAINT)
+
+        if self._branch_text:
+            text.append("  ")
+            text.append(self._branch_text, style=theme.TEXT_MUTED if selected else theme.TEXT_SUBTLE)
+
+        return text
 
 
 class GroupHeader(ListItem):

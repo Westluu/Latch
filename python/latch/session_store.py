@@ -3,12 +3,18 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from json import JSONDecodeError
 from typing import Optional
 
-from latch.claude_paths import claude_project_paths, find_transcript_path, transcript_matches_cwd
+from latch.claude_paths import (
+    claude_project_paths,
+    find_transcript_path,
+    transcript_cwd,
+    transcript_matches_cwd,
+)
 
 
 PLANS_DIR = os.path.join(os.path.expanduser("~"), ".claude", "plans")
@@ -41,6 +47,7 @@ class Message:
 class SessionInfo:
     session_id: str
     label: str
+    branch: str | None = None
     timestamp: Optional[datetime] = None
     started_at: Optional[datetime] = None
     duration_secs: int = 0
@@ -114,6 +121,7 @@ def list_sessions(cwd: str) -> list[SessionInfo]:
             session = SessionInfo(
                 session_id=sid,
                 label=label,
+                branch=_session_branch(fpath, cwd),
                 timestamp=ts,
                 started_at=first_ts,
                 duration_secs=duration,
@@ -328,3 +336,22 @@ def _parse_json_object(line: str) -> dict | None:
     except JSONDecodeError:
         return None
     return obj if isinstance(obj, dict) else None
+
+
+def _session_branch(transcript_path: str, fallback_cwd: str) -> str | None:
+    branch_cwd = transcript_cwd(transcript_path) or fallback_cwd
+    try:
+        result = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=branch_cwd,
+            capture_output=True,
+            text=True,
+        )
+    except OSError:
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    branch = result.stdout.strip()
+    return branch or None

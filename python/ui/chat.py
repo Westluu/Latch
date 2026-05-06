@@ -89,7 +89,7 @@ class ChatApp(App):
         yield Header(show_clock=False)
         with Horizontal():
             with Vertical(id="left-panel"):
-                yield Input(placeholder="Search sessions… (/)", id="search-input")
+                yield Input(placeholder="Search sessions or branches… (/)", id="search-input")
                 yield SessionListView(id="session-list")
             with Vertical(id="right-panel"):
                 yield Static("", id="session-header")
@@ -177,11 +177,14 @@ class ChatApp(App):
             self._render_session_list(self._sessions)
             return
 
-        # Instant label filter
+        # Instant label + branch filter
         query_lower = query.lower()
-        label_matches = [s for s in self._sessions if query_lower in s.label.lower()]
-        self._filtered_sessions = label_matches
-        self._render_session_list(label_matches, query)
+        filtered = [
+            s for s in self._sessions
+            if query_lower in s.label.lower() or query_lower in (s.branch or "").lower()
+        ]
+        self._filtered_sessions = filtered
+        self._render_session_list(filtered, query)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Move focus to session list when Enter is pressed in search."""

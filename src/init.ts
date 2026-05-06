@@ -7,6 +7,7 @@ import {
   addTerminalChatKeybinding,
   addTerminalKeybinding,
   addTerminalWorkspacesKeybinding,
+  hasAnyTerminalKeybinding,
   hasTerminalChatKeybinding,
   hasTerminalKeybinding,
   hasTerminalWorkspacesKeybinding,
@@ -356,7 +357,7 @@ export function removeHook(): void {
     removed = true;
   }
 
-  if (hasTerminalKeybinding()) {
+  if (hasAnyTerminalKeybinding()) {
     removeTerminalKeybinding();
     removed = true;
   }

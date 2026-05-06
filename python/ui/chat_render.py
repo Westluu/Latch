@@ -340,6 +340,10 @@ def render_session_header(session: SessionInfo, messages: list[Message]) -> Text
         text.append(*pipe)
         text.append(session.timestamp.astimezone().strftime("%b %d %H:%M"), style=theme.TEXT_SUBTLE)
 
+    if session.branch:
+        text.append(*pipe)
+        text.append(session.branch, style=theme.INFO)
+
     text.append("\n")
     text.append("claude --resume ", style=theme.INFO)
     text.append(session.session_id, style=theme.INFO)
